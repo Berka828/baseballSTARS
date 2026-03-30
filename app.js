@@ -46,6 +46,10 @@ const strikeZone = { x: 1135, y: 265, w: 120, h: 170 };
 const mitt = { x: 1195, y: 350, r: 52, glow: 0.5 };
 const miniMap = { x: 40, y: 620, w: 280, h: 105 };
 
+// Direction selector
+// If throws are still reversed, change this to -1
+const FORWARD_DIRECTION = 1;
+
 // larger status UI under camera panel
 (function improveStatusUI() {
   const posePanel = document.querySelector(".posePanel");
@@ -247,7 +251,7 @@ async function loop() {
       y: leftShoulder.y * overlay.height
     };
 
-    // build a much more forgiving "load box"
+    // forgiving "load box"
     const torsoHeight = Math.abs(hipScreen.y - shoulderScreen.y);
     const shoulderSpan = Math.abs(shoulderScreen.x - leftShoulderScreen.x);
 
@@ -296,13 +300,17 @@ async function loop() {
       const first = wristHistory[0];
       const last = wristHistory[wristHistory.length - 1];
 
-      const moveX = last.x - first.x;
-      const moveY = first.y - last.y;
-      const power = Math.abs(moveX) + Math.max(0, moveY) * 0.2;
+      // DIRECTIONAL FIX:
+      // only one horizontal direction counts as the throw
+      const rawForwardX = (last.x - first.x) * FORWARD_DIRECTION;
+      const upwardY = first.y - last.y;
+
+      const forwardX = Math.max(0, rawForwardX);
+      const power = forwardX + Math.max(0, upwardY) * 0.2;
 
       const movedOutOfBox = !pointInRect(wristScreen.x, wristScreen.y, loadBox);
 
-      if (movedOutOfBox && power > 18) {
+      if (movedOutOfBox && forwardX > 14 && power > 20) {
         triggerThrow(power);
       } else {
         setStatus("Loaded. Throw forward now.");
@@ -847,7 +855,6 @@ function drawEndScreen() {
 function drawSilhouette(keypoints) {
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-  // load box
   if (loadBox) {
     overlayCtx.fillStyle = readyPoseArmed
       ? "rgba(0,255,140,0.18)"
