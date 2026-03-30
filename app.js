@@ -9,14 +9,16 @@ const statusText = document.getElementById("status");
 
 let detector = null;
 let started = false;
+let cameraStarted = false;
 
 let ball = null;
 let particles = [];
 let rings = [];
+let flashes = [];
 
 let score = 0;
 let pitchCount = 0;
-let maxPitches = 5;
+const maxPitches = 5;
 let gameOver = false;
 let finalRank = "";
 let scoreFlash = "";
@@ -27,44 +29,51 @@ let lastThrowLabel = "READY";
 
 let throwCooldown = false;
 let readyPoseArmed = false;
+let readyPoseFrames = 0;
+let releaseReady = false;
 let wristHistory = [];
+let resultPauseTimer = 0;
 
-const strikeZone = { x: 910, y: 250, w: 90, h: 130 };
-const miniMap = { x: 35, y: 470, w: 220, h: 95 };
+const strikeZone = { x: 1135, y: 275, w: 110, h: 155 };
+const miniMap = { x: 40, y: 620, w: 280, h: 105 };
 
 startBtn.onclick = async () => {
   try {
-    statusText.innerText = "Requesting camera...";
+    if (!cameraStarted) {
+      statusText.innerText = "Requesting camera...";
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: false
-    });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false
+      });
 
-    video.srcObject = stream;
+      video.srcObject = stream;
 
-    await new Promise((resolve) => {
-      video.onloadedmetadata = () => resolve();
-    });
+      await new Promise((resolve) => {
+        video.onloadedmetadata = () => resolve();
+      });
 
-    await video.play();
+      await video.play();
 
-    overlay.width = video.videoWidth || 640;
-    overlay.height = video.videoHeight || 800;
+      overlay.width = video.videoWidth || 640;
+      overlay.height = video.videoHeight || 800;
 
-    statusText.innerText = "Loading pose detector...";
+      statusText.innerText = "Loading pose detector...";
 
-    await tf.setBackend("webgl");
-    await tf.ready();
+      await tf.setBackend("webgl");
+      await tf.ready();
 
-    detector = await poseDetection.createDetector(
-      poseDetection.SupportedModels.MoveNet,
-      {
-        modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
-      }
-    );
+      detector = await poseDetection.createDetector(
+        poseDetection.SupportedModels.MoveNet,
+        {
+          modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
+        }
+      );
 
-    statusText.innerText = "Bring your throwing hand near your shoulder to arm the pitch.";
+      cameraStarted = true;
+    }
+
+    statusText.innerText = "Bring your throwing hand near your shoulder and hold it there briefly.";
 
     if (!started) {
       started = true;
@@ -85,6 +94,7 @@ function resetGame() {
   ball = null;
   particles = [];
   rings = [];
+  flashes = [];
   score = 0;
   pitchCount = 0;
   gameOver = false;
@@ -95,8 +105,11 @@ function resetGame() {
   lastThrowLabel = "READY";
   throwCooldown = false;
   readyPoseArmed = false;
+  readyPoseFrames = 0;
+  releaseReady = false;
   wristHistory = [];
-  statusText.innerText = "Game reset. Bring your hand near your shoulder to arm the pitch.";
+  resultPauseTimer = 0;
+  statusText.innerText = "Game reset. Load your arm near your shoulder.";
 }
 
 async function loop() {
@@ -122,19 +135,9 @@ async function loop() {
     const rightWrist = findKeypoint(keypoints, "right_wrist");
     const rightElbow = findKeypoint(keypoints, "right_elbow");
     const rightShoulder = findKeypoint(keypoints, "right_shoulder");
-    const leftShoulder = findKeypoint(keypoints, "left_shoulder");
-    const leftHip = findKeypoint(keypoints, "left_hip");
-    const rightHip = findKeypoint(keypoints, "right_hip");
 
     if (
       !rightWrist || !rightElbow || !rightShoulder ||
-      !leftShoulder || !leftHip || !rightHip
-    ) {
-      statusText.innerText = "Body landmarks unclear. Face camera and step back.";
-      return;
-    }
-
-    if (
       rightWrist.score < 0.25 ||
       rightElbow.score < 0.25 ||
       rightShoulder.score < 0.25
@@ -145,39 +148,52 @@ async function loop() {
 
     drawSilhouette(keypoints);
 
-    if (gameOver) return;
+    if (gameOver || throwCooldown || resultPauseTimer > 0 || ball) return;
 
     const shoulderDist = dist(rightWrist.x, rightWrist.y, rightShoulder.x, rightShoulder.y);
-    const elbowBend = dist(rightWrist.x, rightWrist.y, rightElbow.x, rightElbow.y);
+    const elbowDist = dist(rightWrist.x, rightWrist.y, rightElbow.x, rightElbow.y);
 
     wristHistory.push({
       x: rightWrist.x,
       y: rightWrist.y,
       t: performance.now()
     });
-    if (wristHistory.length > 8) wristHistory.shift();
+    if (wristHistory.length > 10) wristHistory.shift();
 
-    const armNearShoulder = shoulderDist < 0.16;
-    const armLoaded = armNearShoulder && elbowBend < 0.22;
+    const loadedPose = shoulderDist < 0.14 && elbowDist < 0.20;
 
-    if (armLoaded && !throwCooldown && !ball) {
-      readyPoseArmed = true;
-      statusText.innerText = "Loaded. Throw forward now.";
+    if (!readyPoseArmed) {
+      if (loadedPose) {
+        readyPoseFrames++;
+        statusText.innerText = "Hold... loading pitch.";
+      } else {
+        readyPoseFrames = 0;
+        statusText.innerText = "Bring your hand near your shoulder to load the pitch.";
+      }
+
+      if (readyPoseFrames >= 10) {
+        readyPoseArmed = true;
+        releaseReady = true;
+        statusText.innerText = "Loaded. Throw forward now.";
+      }
+      return;
     }
 
-    if (readyPoseArmed && wristHistory.length >= 4 && !throwCooldown && !ball) {
+    if (releaseReady && wristHistory.length >= 5) {
       const first = wristHistory[0];
       const last = wristHistory[wristHistory.length - 1];
 
       const dx = (last.x - first.x) * overlay.width;
       const dy = (first.y - last.y) * overlay.height;
-      const power = Math.abs(dx) + Math.abs(dy) * 0.35;
+      const power = Math.abs(dx) + Math.max(0, dy) * 0.30;
 
-      if (power > 75 && shoulderDist > 0.22) {
+      // require the hand to move meaningfully away from shoulder after loading
+      if (shoulderDist > 0.23 && power > 110) {
         triggerThrow(power);
+      } else {
+        statusText.innerText = "Loaded. Throw forward now.";
       }
     }
-
   } catch (err) {
     console.error(err);
     statusText.innerText = "Pose error: " + err.message;
@@ -185,40 +201,45 @@ async function loop() {
 }
 
 function triggerThrow(power) {
-  const strength = Math.min(power, 180);
-  currentPower = Math.min(220, strength);
+  const strength = Math.min(power, 200);
+  currentPower = Math.min(260, strength);
 
-  if (strength < 90) lastThrowLabel = "SOFT TOSS";
-  else if (strength < 120) lastThrowLabel = "FAST BALL";
-  else if (strength < 150) lastThrowLabel = "POWER PITCH";
+  if (strength < 120) lastThrowLabel = "SOFT TOSS";
+  else if (strength < 145) lastThrowLabel = "FAST BALL";
+  else if (strength < 170) lastThrowLabel = "POWER PITCH";
   else lastThrowLabel = "SUPER HEATER";
 
   ball = {
-    x: 145,
-    y: 430,
-    vx: 11 + strength * 0.18,
-    vy: -7.5 - strength * 0.04,
-    r: 13
+    x: 175,
+    y: 500,
+    vx: 11 + strength * 0.12,
+    vy: -6.5 - strength * 0.032,
+    r: 14
   };
 
-  makeBurst(145, 430, 1.1, "#7fd6ff");
+  makeBurst(175, 500, 1.2, "#7fd6ff");
+  makeRing(175, 500, "#7fd6ff");
+
   readyPoseArmed = false;
+  readyPoseFrames = 0;
+  releaseReady = false;
   throwCooldown = true;
   wristHistory = [];
 
-  statusText.innerText = "Throw detected.";
+  statusText.innerText = "Pitch launched.";
 
   setTimeout(() => {
     throwCooldown = false;
-    if (!gameOver) {
-      statusText.innerText = "Bring your hand near your shoulder to arm the next pitch.";
-    }
-  }, 900);
+  }, 500);
 }
 
 function updateGame() {
+  if (resultPauseTimer > 0) {
+    resultPauseTimer--;
+  }
+
   if (ball && !gameOver) {
-    ball.vy += 0.28;
+    ball.vy += 0.23;
     ball.x += ball.vx;
     ball.y += ball.vy;
 
@@ -226,18 +247,18 @@ function updateGame() {
 
     if (ball.x >= strikeZone.x) {
       resolvePitch();
-      makeBurst(ball.x, ball.y, 1.5, "#ffb347");
-      makeRing(ball.x, ball.y);
       ball = null;
+      resultPauseTimer = 40;
     }
 
-    if (ball && (ball.y > 560 || ball.x > gameCanvas.width + 40)) {
+    if (ball && (ball.y > 660 || ball.x > gameCanvas.width + 40)) {
       pitchCount++;
       scoreFlash = "MISS";
       scoreFlashTimer = 55;
-      makeBurst(ball.x, Math.min(ball.y, 560), 0.9, "#ff7b7b");
-      makeRing(ball.x, Math.min(ball.y, 560));
+      makeBurst(ball.x, Math.min(ball.y, 660), 1.0, "#ff7b7b");
+      makeRing(ball.x, Math.min(ball.y, 660), "#ff7b7b");
       ball = null;
+      resultPauseTimer = 40;
       checkGameOver();
     }
   }
@@ -246,15 +267,20 @@ function updateGame() {
     const p = particles[i];
     p.x += p.vx;
     p.y += p.vy;
-    p.size *= 0.97;
+    p.size *= 0.975;
     p.alpha *= 0.95;
     if (p.size < 0.8 || p.alpha < 0.05) particles.splice(i, 1);
   }
 
   for (let i = rings.length - 1; i >= 0; i--) {
-    rings[i].r += 4;
+    rings[i].r += 5;
     rings[i].alpha *= 0.92;
     if (rings[i].alpha < 0.05) rings.splice(i, 1);
+  }
+
+  for (let i = flashes.length - 1; i >= 0; i--) {
+    flashes[i].alpha *= 0.90;
+    if (flashes[i].alpha < 0.05) flashes.splice(i, 1);
   }
 
   if (scoreFlashTimer > 0) scoreFlashTimer--;
@@ -266,30 +292,42 @@ function resolvePitch() {
   const centerY = strikeZone.y + strikeZone.h / 2;
   const distanceFromCenter = Math.abs(ball.y - centerY);
 
-  if (ball.y >= strikeZone.y && ball.y <= strikeZone.y + strikeZone.h) {
-    if (distanceFromCenter < 18) {
+  const inZone = ball.y >= strikeZone.y && ball.y <= strikeZone.y + strikeZone.h;
+
+  if (inZone) {
+    if (distanceFromCenter < 20) {
       score += 200;
       scoreFlash = "PERFECT +200";
-      scoreFlashTimer = 60;
-      makeBurst(ball.x, ball.y, 1.7, "#ffe066");
+      scoreFlashTimer = 70;
+      makeBurst(ball.x, ball.y, 2.1, "#ffe066");
+      makeRing(ball.x, ball.y, "#ffe066");
+      addFlash("#ffe066");
     } else {
       score += 100;
       scoreFlash = "STRIKE +100";
-      scoreFlashTimer = 60;
-      makeBurst(ball.x, ball.y, 1.2, "#9df59d");
+      scoreFlashTimer = 65;
+      makeBurst(ball.x, ball.y, 1.6, "#8dffb2");
+      makeRing(ball.x, ball.y, "#8dffb2");
+      addFlash("#8dffb2");
     }
 
-    if (currentPower > 145) {
+    if (currentPower > 160) {
       score += 50;
       scoreFlash += "  HEAT +50";
-      scoreFlashTimer = 70;
+      scoreFlashTimer = 75;
     }
   } else {
     scoreFlash = "BALL";
     scoreFlashTimer = 55;
+    makeBurst(ball.x, ball.y, 1.1, "#ff9f7a");
+    makeRing(ball.x, ball.y, "#ff9f7a");
   }
 
   checkGameOver();
+
+  if (!gameOver) {
+    statusText.innerText = "Result locked. Reload your arm for the next pitch.";
+  }
 }
 
 function checkGameOver() {
@@ -306,13 +344,13 @@ function checkGameOver() {
 }
 
 function addTrail(x, y) {
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     particles.push({
       x,
       y,
-      vx: Math.random() * 2 - 2.5,
-      vy: Math.random() * 2 - 1,
-      size: 4 + Math.random() * 7,
+      vx: Math.random() * 2 - 3.0,
+      vy: Math.random() * 2 - 1.1,
+      size: 4 + Math.random() * 8,
       alpha: 0.95,
       color: "#ffb347"
     });
@@ -320,22 +358,26 @@ function addTrail(x, y) {
 }
 
 function makeBurst(x, y, scale, color) {
-  const count = Math.floor(18 + scale * 24);
+  const count = Math.floor(24 + scale * 32);
   for (let i = 0; i < count; i++) {
     particles.push({
       x,
       y,
-      vx: (Math.random() * 10 - 5) * scale,
-      vy: (Math.random() * 10 - 5) * scale,
-      size: (3 + Math.random() * 8) * scale,
+      vx: (Math.random() * 12 - 6) * scale,
+      vy: (Math.random() * 12 - 6) * scale,
+      size: (3 + Math.random() * 9) * scale,
       alpha: 1,
       color
     });
   }
 }
 
-function makeRing(x, y) {
-  rings.push({ x, y, r: 10, alpha: 0.9 });
+function makeRing(x, y, color) {
+  rings.push({ x, y, r: 10, alpha: 0.9, color });
+}
+
+function addFlash(color) {
+  flashes.push({ alpha: 0.35, color });
 }
 
 function drawGame() {
@@ -348,61 +390,93 @@ function drawGame() {
   drawRings();
   drawParticles();
   drawBall();
+  drawCelebrationFlash();
   drawEndScreen();
 }
 
 function drawBackground() {
   const sky = gameCtx.createLinearGradient(0, 0, 0, gameCanvas.height);
-  sky.addColorStop(0, "#8fd7ff");
-  sky.addColorStop(0.36, "#dff5ff");
-  sky.addColorStop(0.37, "#2c4667");
-  sky.addColorStop(0.52, "#20344d");
-  sky.addColorStop(0.53, "#4ba657");
-  sky.addColorStop(1, "#256739");
+  sky.addColorStop(0, "#99e0ff");
+  sky.addColorStop(0.32, "#ebf9ff");
+  sky.addColorStop(0.33, "#314b6b");
+  sky.addColorStop(0.53, "#21364d");
+  sky.addColorStop(0.54, "#4db45e");
+  sky.addColorStop(1, "#265f37");
   gameCtx.fillStyle = sky;
   gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
 
-  gameCtx.fillStyle = "#20344d";
-  gameCtx.fillRect(0, 210, gameCanvas.width, 85);
+  // crowd deck
+  gameCtx.fillStyle = "#253b53";
+  gameCtx.fillRect(0, 220, gameCanvas.width, 95);
 
-  for (let i = 0; i < 180; i++) {
-    gameCtx.fillStyle = `rgba(255,255,255,${0.12 + Math.random() * 0.32})`;
+  for (let i = 0; i < 220; i++) {
+    gameCtx.fillStyle = `rgba(255,255,255,${0.10 + Math.random() * 0.35})`;
     gameCtx.beginPath();
-    gameCtx.arc(15 + i * 6, 225 + Math.random() * 55, 1.5 + Math.random() * 1.7, 0, Math.PI * 2);
+    gameCtx.arc(12 + i * 7, 235 + Math.random() * 62, 1.5 + Math.random() * 1.7, 0, Math.PI * 2);
     gameCtx.fill();
   }
 
-  for (let i = 0; i < 9; i++) {
-    gameCtx.fillStyle = "rgba(255,248,190,0.9)";
+  // stadium lights
+  for (let i = 0; i < 10; i++) {
+    gameCtx.fillStyle = "rgba(255,248,190,0.95)";
     gameCtx.beginPath();
-    gameCtx.arc(80 + i * 110, 58, 11, 0, Math.PI * 2);
+    gameCtx.arc(80 + i * 135, 60, 12, 0, Math.PI * 2);
     gameCtx.fill();
   }
 
-  gameCtx.strokeStyle = "rgba(255,255,255,0.25)";
-  gameCtx.lineWidth = 4;
+  // fence line
+  gameCtx.strokeStyle = "rgba(255,255,255,0.28)";
+  gameCtx.lineWidth = 5;
   gameCtx.beginPath();
-  gameCtx.moveTo(0, 420);
-  gameCtx.lineTo(gameCanvas.width, 420);
+  gameCtx.moveTo(0, 455);
+  gameCtx.lineTo(gameCanvas.width, 455);
   gameCtx.stroke();
 
-  for (let i = 0; i < 9; i++) {
+  // grass stripes
+  for (let i = 0; i < 10; i++) {
     gameCtx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)";
-    gameCtx.fillRect(0, 430 + i * 22, gameCanvas.width, 22);
+    gameCtx.fillRect(0, 470 + i * 28, gameCanvas.width, 28);
   }
 
+  // pitcher mound
   gameCtx.fillStyle = "#c98b52";
   gameCtx.beginPath();
-  gameCtx.ellipse(145, 445, 42, 14, 0, 0, Math.PI * 2);
+  gameCtx.ellipse(175, 520, 52, 18, 0, 0, Math.PI * 2);
   gameCtx.fill();
+
+  // subtle home plate path
+  gameCtx.strokeStyle = "rgba(255,255,255,0.10)";
+  gameCtx.lineWidth = 3;
+  gameCtx.beginPath();
+  gameCtx.moveTo(175, 505);
+  gameCtx.lineTo(strikeZone.x + strikeZone.w / 2, strikeZone.y + strikeZone.h / 2);
+  gameCtx.stroke();
 }
 
 function drawStrikeZone() {
+  // catcher backplate glow
+  const glow = gameCtx.createRadialGradient(
+    strikeZone.x + strikeZone.w / 2,
+    strikeZone.y + strikeZone.h / 2,
+    10,
+    strikeZone.x + strikeZone.w / 2,
+    strikeZone.y + strikeZone.h / 2,
+    120
+  );
+  glow.addColorStop(0, "rgba(255,230,100,0.18)");
+  glow.addColorStop(1, "rgba(255,230,100,0)");
+  gameCtx.fillStyle = glow;
+  gameCtx.fillRect(strikeZone.x - 50, strikeZone.y - 50, strikeZone.w + 100, strikeZone.h + 100);
+
+  // catcher frame
+  gameCtx.fillStyle = "rgba(0,0,0,0.22)";
+  gameCtx.fillRect(strikeZone.x - 18, strikeZone.y - 18, strikeZone.w + 36, strikeZone.h + 36);
+
   gameCtx.strokeStyle = "white";
-  gameCtx.lineWidth = 5;
+  gameCtx.lineWidth = 6;
   gameCtx.strokeRect(strikeZone.x, strikeZone.y, strikeZone.w, strikeZone.h);
 
-  gameCtx.strokeStyle = "rgba(255,217,0,0.95)";
+  gameCtx.strokeStyle = "rgba(255,215,0,0.95)";
   gameCtx.lineWidth = 3;
   gameCtx.strokeRect(
     strikeZone.x + 18,
@@ -411,77 +485,95 @@ function drawStrikeZone() {
     strikeZone.h - 48
   );
 
-  gameCtx.fillStyle = "rgba(0,0,0,0.5)";
-  gameCtx.fillRect(strikeZone.x - 6, strikeZone.y - 38, 132, 28);
+  // crosshair
+  gameCtx.strokeStyle = "rgba(255,255,255,0.22)";
+  gameCtx.lineWidth = 2;
+  gameCtx.beginPath();
+  gameCtx.moveTo(strikeZone.x + strikeZone.w / 2, strikeZone.y);
+  gameCtx.lineTo(strikeZone.x + strikeZone.w / 2, strikeZone.y + strikeZone.h);
+  gameCtx.stroke();
+
+  gameCtx.beginPath();
+  gameCtx.moveTo(strikeZone.x, strikeZone.y + strikeZone.h / 2);
+  gameCtx.lineTo(strikeZone.x + strikeZone.w, strikeZone.y + strikeZone.h / 2);
+  gameCtx.stroke();
+
+  gameCtx.fillStyle = "rgba(0,0,0,0.54)";
+  gameCtx.fillRect(strikeZone.x - 6, strikeZone.y - 42, 146, 30);
 
   gameCtx.fillStyle = "white";
-  gameCtx.font = "bold 15px Arial";
-  gameCtx.fillText("STRIKE ZONE", strikeZone.x + 6, strikeZone.y - 18);
+  gameCtx.font = "bold 16px Arial";
+  gameCtx.fillText("STRIKE ZONE", strikeZone.x + 8, strikeZone.y - 21);
 }
 
 function drawMiniMap() {
-  gameCtx.fillStyle = "rgba(0,0,0,0.35)";
+  gameCtx.fillStyle = "rgba(0,0,0,0.38)";
   gameCtx.fillRect(miniMap.x, miniMap.y, miniMap.w, miniMap.h);
 
-  gameCtx.strokeStyle = "rgba(255,255,255,0.25)";
+  gameCtx.strokeStyle = "rgba(255,255,255,0.28)";
   gameCtx.strokeRect(miniMap.x, miniMap.y, miniMap.w, miniMap.h);
 
   gameCtx.fillStyle = "#8fd7ff";
   gameCtx.font = "bold 14px Arial";
-  gameCtx.fillText("OVERHEAD VIEW", miniMap.x + 12, miniMap.y + 20);
+  gameCtx.fillText("OVERHEAD VIEW", miniMap.x + 14, miniMap.y + 21);
 
-  gameCtx.strokeStyle = "rgba(255,255,255,0.18)";
+  gameCtx.strokeStyle = "rgba(255,255,255,0.22)";
   gameCtx.beginPath();
-  gameCtx.moveTo(miniMap.x + 30, miniMap.y + 65);
-  gameCtx.lineTo(miniMap.x + 185, miniMap.y + 65);
+  gameCtx.moveTo(miniMap.x + 35, miniMap.y + 68);
+  gameCtx.lineTo(miniMap.x + 235, miniMap.y + 68);
   gameCtx.stroke();
 
   gameCtx.fillStyle = "#c98b52";
   gameCtx.beginPath();
-  gameCtx.arc(miniMap.x + 35, miniMap.y + 65, 8, 0, Math.PI * 2);
+  gameCtx.arc(miniMap.x + 35, miniMap.y + 68, 9, 0, Math.PI * 2);
   gameCtx.fill();
 
   gameCtx.strokeStyle = "white";
-  gameCtx.strokeRect(miniMap.x + 175, miniMap.y + 42, 22, 45);
+  gameCtx.lineWidth = 2;
+  gameCtx.strokeRect(miniMap.x + 228, miniMap.y + 44, 26, 48);
 
   if (ball) {
-    const t = Math.min(1, (ball.x - 145) / (strikeZone.x - 145));
-    const miniX = miniMap.x + 35 + t * 150;
+    const t = Math.min(1, (ball.x - 175) / (strikeZone.x - 175));
+    const miniX = miniMap.x + 35 + t * 200;
     gameCtx.fillStyle = "#ffb347";
     gameCtx.beginPath();
-    gameCtx.arc(miniX, miniMap.y + 65, 5, 0, Math.PI * 2);
+    gameCtx.arc(miniX, miniMap.y + 68, 6, 0, Math.PI * 2);
     gameCtx.fill();
   }
 }
 
 function drawHUD() {
-  gameCtx.fillStyle = "rgba(0,0,0,0.35)";
-  gameCtx.fillRect(28, 24, 250, 28);
+  // power bar
+  gameCtx.fillStyle = "rgba(0,0,0,0.40)";
+  gameCtx.fillRect(34, 28, 280, 30);
 
   let meterColor = "#5dc7ff";
-  if (currentPower > 60) meterColor = "#ffe066";
-  if (currentPower > 110) meterColor = "#ff9f43";
-  if (currentPower > 150) meterColor = "#ff4d4d";
+  if (currentPower > 90) meterColor = "#ffe066";
+  if (currentPower > 140) meterColor = "#ff9f43";
+  if (currentPower > 175) meterColor = "#ff4d4d";
 
   gameCtx.fillStyle = meterColor;
-  gameCtx.fillRect(28, 24, Math.min(currentPower, 250), 28);
-  gameCtx.strokeStyle = "rgba(255,255,255,0.7)";
+  gameCtx.fillRect(34, 28, Math.min(currentPower, 280), 30);
+
+  gameCtx.strokeStyle = "rgba(255,255,255,0.75)";
   gameCtx.lineWidth = 2;
-  gameCtx.strokeRect(28, 24, 250, 28);
+  gameCtx.strokeRect(34, 28, 280, 30);
 
   gameCtx.fillStyle = "white";
-  gameCtx.font = "bold 14px Arial";
-  gameCtx.fillText("PITCH POWER", 28, 18);
+  gameCtx.font = "bold 15px Arial";
+  gameCtx.fillText("PITCH POWER", 34, 20);
 
-  gameCtx.fillStyle = "rgba(0,0,0,0.42)";
-  gameCtx.fillRect(810, 24, 240, 72);
+  // score card
+  gameCtx.fillStyle = "rgba(0,0,0,0.45)";
+  gameCtx.fillRect(1030, 28, 300, 78);
   gameCtx.fillStyle = "white";
-  gameCtx.font = "bold 24px Arial";
-  gameCtx.fillText(`Score: ${score}`, 830, 55);
-  gameCtx.fillText(`Pitch: ${pitchCount}/${maxPitches}`, 830, 86);
+  gameCtx.font = "bold 28px Arial";
+  gameCtx.fillText(`Score: ${score}`, 1055, 60);
+  gameCtx.fillText(`Pitch: ${pitchCount}/${maxPitches}`, 1055, 93);
 
+  // big label
   gameCtx.textAlign = "center";
-  gameCtx.font = "bold 52px Arial";
+  gameCtx.font = "bold 58px Arial";
 
   if (lastThrowLabel === "SOFT TOSS") gameCtx.fillStyle = "#d6f0ff";
   else if (lastThrowLabel === "FAST BALL") gameCtx.fillStyle = "#ffe066";
@@ -489,12 +581,12 @@ function drawHUD() {
   else if (lastThrowLabel === "SUPER HEATER") gameCtx.fillStyle = "#ff4d4d";
   else gameCtx.fillStyle = "white";
 
-  gameCtx.fillText(lastThrowLabel, gameCanvas.width / 2, 86);
+  gameCtx.fillText(lastThrowLabel, gameCanvas.width / 2, 90);
 
   if (scoreFlashTimer > 0) {
-    gameCtx.font = "bold 28px Arial";
+    gameCtx.font = "bold 30px Arial";
     gameCtx.fillStyle = "#fff28a";
-    gameCtx.fillText(scoreFlash, gameCanvas.width / 2, 126);
+    gameCtx.fillText(scoreFlash, gameCanvas.width / 2, 132);
   }
 
   gameCtx.textAlign = "start";
@@ -530,37 +622,44 @@ function drawParticles() {
 
 function drawRings() {
   rings.forEach((r) => {
-    gameCtx.strokeStyle = `rgba(255,255,255,${r.alpha})`;
-    gameCtx.lineWidth = 4;
+    gameCtx.strokeStyle = hexToRgba(r.color || "#ffffff", r.alpha);
+    gameCtx.lineWidth = 5;
     gameCtx.beginPath();
     gameCtx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
     gameCtx.stroke();
   });
 }
 
+function drawCelebrationFlash() {
+  flashes.forEach((f) => {
+    gameCtx.fillStyle = hexToRgba(f.color, f.alpha * 0.22);
+    gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
+  });
+}
+
 function drawEndScreen() {
   if (!gameOver) return;
 
-  gameCtx.fillStyle = "rgba(0,0,0,0.68)";
-  gameCtx.fillRect(260, 150, 580, 260);
+  gameCtx.fillStyle = "rgba(0,0,0,0.70)";
+  gameCtx.fillRect(400, 180, 620, 280);
 
   gameCtx.strokeStyle = "rgba(255,255,255,0.18)";
-  gameCtx.strokeRect(260, 150, 580, 260);
+  gameCtx.strokeRect(400, 180, 620, 280);
 
   gameCtx.fillStyle = "white";
-  gameCtx.font = "bold 48px Arial";
-  gameCtx.fillText("CHALLENGE COMPLETE", 320, 220);
+  gameCtx.font = "bold 50px Arial";
+  gameCtx.fillText("CHALLENGE COMPLETE", 470, 255);
 
   gameCtx.fillStyle = "#ffe066";
-  gameCtx.font = "bold 44px Arial";
-  gameCtx.fillText(finalRank, 430, 285);
+  gameCtx.font = "bold 46px Arial";
+  gameCtx.fillText(finalRank, 575, 320);
 
   gameCtx.fillStyle = "white";
-  gameCtx.font = "bold 30px Arial";
-  gameCtx.fillText(`FINAL SCORE: ${score}`, 445, 340);
+  gameCtx.font = "bold 32px Arial";
+  gameCtx.fillText(`FINAL SCORE: ${score}`, 590, 378);
 
   gameCtx.font = "bold 22px Arial";
-  gameCtx.fillText("Press Reset Game to play again", 420, 382);
+  gameCtx.fillText("Press Reset Game to play again", 555, 425);
 }
 
 function drawSilhouette(keypoints) {
@@ -581,7 +680,7 @@ function drawSilhouette(keypoints) {
 
   keypoints.forEach((k) => {
     if (k.score > 0.25) {
-      overlayCtx.fillStyle = "rgba(255,230,120,0.95)";
+      overlayCtx.fillStyle = "rgba(255,230,120,0.92)";
       overlayCtx.beginPath();
       overlayCtx.arc(k.x, k.y, 5, 0, Math.PI * 2);
       overlayCtx.fill();
