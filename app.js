@@ -11,6 +11,7 @@ let started = false;
 let wristHistory = [];
 let ball = null;
 let particles = [];
+let throwCooldown = false;
 
 startBtn.onclick = async () => {
   try {
@@ -44,7 +45,7 @@ startBtn.onclick = async () => {
       }
     );
 
-    statusText.innerText = "Ready. Stand back so your upper body is visible.";
+    statusText.innerText = "Ready. Hold your right hand up, then throw forward.";
 
     if (!started) {
       started = true;
@@ -85,12 +86,17 @@ async function loop() {
       return;
     }
 
+    // Wrist marker
     overlayCtx.beginPath();
     overlayCtx.arc(rightWrist.x, rightWrist.y, 10, 0, Math.PI * 2);
     overlayCtx.fillStyle = "yellow";
     overlayCtx.fill();
 
-    statusText.innerText = "Body detected. Move your right arm forward.";
+    // Shoulder marker
+    overlayCtx.beginPath();
+    overlayCtx.arc(rightShoulder.x, rightShoulder.y, 8, 0, Math.PI * 2);
+    overlayCtx.fillStyle = "cyan";
+    overlayCtx.fill();
 
     wristHistory.push({
       x: rightWrist.x,
@@ -98,22 +104,36 @@ async function loop() {
       t: performance.now()
     });
 
-    if (wristHistory.length > 6) wristHistory.shift();
+    if (wristHistory.length > 8) wristHistory.shift();
 
-    if (wristHistory.length >= 2) {
+    if (wristHistory.length >= 4 && !throwCooldown && !ball) {
       const first = wristHistory[0];
       const last = wristHistory[wristHistory.length - 1];
 
       const dx = last.x - first.x;
       const dy = first.y - last.y;
-      const shoulderDistance = Math.abs(rightWrist.x - rightShoulder.x);
+      const distanceFromShoulder = Math.abs(rightWrist.x - rightShoulder.x);
 
-      const power = Math.abs(dx) + Math.abs(dy) * 0.5;
+      const power = Math.abs(dx) + Math.abs(dy) * 0.35;
 
-      if (power > 35 && shoulderDistance > 20 && !ball) {
+      if (distanceFromShoulder < 55) {
+        statusText.innerText = "Ready position found. Throw forward now.";
+      } else {
+        statusText.innerText = "Bring hand near shoulder, then throw.";
+      }
+
+      // Throw trigger:
+      // hand starts near shoulder, then moves strongly away
+      if (distanceFromShoulder > 70 && power > 45) {
         throwBall(power);
+        makeBurst(85, 305, 0.45);
         wristHistory = [];
+        throwCooldown = true;
         statusText.innerText = "Throw detected!";
+
+        setTimeout(() => {
+          throwCooldown = false;
+        }, 900);
       }
     }
   } catch (err) {
@@ -127,30 +147,34 @@ function findKeypoint(keypoints, name) {
 }
 
 function throwBall(power) {
+  const strength = Math.min(power, 180);
+
   ball = {
-    x: 60,
-    y: 300,
-    vx: 8 + power * 0.18,
-    vy: -8 - power * 0.05
+    x: 85,
+    y: 305,
+    vx: 7 + strength * 0.11,
+    vy: -8 - strength * 0.045,
+    r: 10
   };
 }
 
 function updateGame() {
   if (ball) {
-    ball.vy += 0.4;
+    ball.vy += 0.36;
     ball.x += ball.vx;
     ball.y += ball.vy;
 
     particles.push({
       x: ball.x,
       y: ball.y,
-      vx: Math.random() * 2 - 1,
-      vy: Math.random() * 2 - 1,
-      size: 4 + Math.random() * 6
+      vx: Math.random() * 1.8 - 0.9,
+      vy: Math.random() * 1.8 - 0.9,
+      size: 3 + Math.random() * 5,
+      alpha: 1
     });
 
-    if (ball.y > 350 || ball.x > gameCanvas.width - 20) {
-      explode(ball.x, Math.min(ball.y, 350));
+    if (ball.y > 345 || ball.x > gameCanvas.width - 20) {
+      makeBurst(ball.x, Math.min(ball.y, 345), 1);
       ball = null;
     }
   }
@@ -158,20 +182,24 @@ function updateGame() {
   particles.forEach((p) => {
     p.x += p.vx || 0;
     p.y += p.vy || 0;
-    p.size *= 0.95;
+    p.size *= 0.96;
+    p.alpha *= 0.95;
   });
 
-  particles = particles.filter((p) => p.size > 1);
+  particles = particles.filter((p) => p.size > 0.8 && p.alpha > 0.05);
 }
 
-function explode(x, y) {
-  for (let i = 0; i < 35; i++) {
+function makeBurst(x, y, scale) {
+  const count = Math.floor(20 + scale * 30);
+
+  for (let i = 0; i < count; i++) {
     particles.push({
       x,
       y,
-      vx: Math.random() * 8 - 4,
-      vy: Math.random() * 8 - 4,
-      size: 5 + Math.random() * 10
+      vx: (Math.random() * 8 - 4) * scale,
+      vy: (Math.random() * 8 - 4) * scale,
+      size: (4 + Math.random() * 8) * scale,
+      alpha: 1
     });
   }
 }
@@ -179,17 +207,49 @@ function explode(x, y) {
 function drawGame() {
   gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
 
+  const sky = gameCtx.createLinearGradient(0, 0, 0, gameCanvas.height);
+  sky.addColorStop(0, "#87ceeb");
+  sky.addColorStop(0.5, "#87ceeb");
+  sky.addColorStop(0.5, "#3cb371");
+  sky.addColorStop(1, "#3cb371");
+  gameCtx.fillStyle = sky;
+  gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
+
+  // ground line
+  gameCtx.strokeStyle = "rgba(255,255,255,0.5)";
+  gameCtx.lineWidth = 2;
+  gameCtx.beginPath();
+  gameCtx.moveTo(0, 345);
+  gameCtx.lineTo(gameCanvas.width, 345);
+  gameCtx.stroke();
+
+  // throw origin
+  gameCtx.fillStyle = "#c98b52";
+  gameCtx.beginPath();
+  gameCtx.ellipse(85, 315, 30, 10, 0, 0, Math.PI * 2);
+  gameCtx.fill();
+
   if (ball) {
     gameCtx.beginPath();
-    gameCtx.arc(ball.x, ball.y, 10, 0, Math.PI * 2);
+    gameCtx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
     gameCtx.fillStyle = "white";
     gameCtx.fill();
+
+    gameCtx.strokeStyle = "#cc3333";
+    gameCtx.lineWidth = 2;
+    gameCtx.beginPath();
+    gameCtx.arc(ball.x, ball.y, ball.r - 3, 0.5, 2.4);
+    gameCtx.stroke();
+
+    gameCtx.beginPath();
+    gameCtx.arc(ball.x, ball.y, ball.r - 3, 3.6, 5.6);
+    gameCtx.stroke();
   }
 
   particles.forEach((p) => {
+    gameCtx.fillStyle = `rgba(255,165,0,${p.alpha})`;
     gameCtx.beginPath();
     gameCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-    gameCtx.fillStyle = "orange";
     gameCtx.fill();
   });
 }
