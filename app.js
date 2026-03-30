@@ -42,10 +42,10 @@ const strikeZone = { x: 1120, y: 260, w: 125, h: 175 };
 const mitt = { x: 1188, y: 348, r: 56, glow: 0.5 };
 const miniMap = { x: 38, y: 618, w: 285, h: 110 };
 
-// if direction feels backward, change to -1
+// flip to -1 if direction feels reversed
 const FORWARD_DIRECTION = 1;
 
-// bigger status box under silhouette
+// bigger status box
 (function improveStatusUI() {
   const posePanel = document.querySelector(".posePanel");
   if (posePanel && statusText) {
@@ -73,9 +73,14 @@ function setStatus(msg) {
    AUDIO
 ========================= */
 let audioCtx = null;
+
 function ensureAudio() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  if (audioCtx.state === "suspended") audioCtx.resume();
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
 }
 
 function playTone(freq = 440, duration = 0.08, type = "sine", volume = 0.04, slideTo = null) {
@@ -266,7 +271,6 @@ async function loop() {
     const torsoHeight = Math.abs(hipScreen.y - shoulderScreen.y);
     const shoulderSpan = Math.abs(shoulderScreen.x - leftShoulderScreen.x);
 
-    // true wind-up box behind shoulder
     const boxW = Math.max(shoulderSpan * 0.8, 100);
     const boxH = Math.max(torsoHeight * 0.7, 120);
 
@@ -279,14 +283,20 @@ async function loop() {
 
     drawSilhouette(keypoints);
 
-    if (gameOver || throwCooldown || resultPauseTimer > 0 || ball) return;
+    // locked states
+    if (gameOver || throwCooldown || resultPauseTimer > 0 || ball) {
+      if (!gameOver && resultPauseTimer > 0) {
+        setStatus("Pause... reset your arm for the next pitch.");
+      }
+      return;
+    }
 
     wristHistory.push({
       x: wristScreen.x,
       y: wristScreen.y,
       t: performance.now()
     });
-    if (wristHistory.length > 14) wristHistory.shift();
+    if (wristHistory.length > 16) wristHistory.shift();
 
     const wristInLoadBox = pointInRect(wristScreen.x, wristScreen.y, loadBox);
 
@@ -300,18 +310,21 @@ async function loop() {
           setStatus("Move your throwing hand into the blue box.");
         }
 
-        if (readyPoseFrames >= 4) {
+        // MORE HOLD REQUIRED THAN BEFORE
+        if (readyPoseFrames >= 7) {
           readyPoseArmed = true;
           setStatus("Loaded. Throw forward now.");
         }
       } else {
         setStatus("Move your hand out, then back into the blue box.");
-        if (!wristInLoadBox) readyLockout = false;
+        if (!wristInLoadBox) {
+          readyLockout = false;
+        }
       }
       return;
     }
 
-    if (wristHistory.length >= 5) {
+    if (wristHistory.length >= 6) {
       const first = wristHistory[0];
       const last = wristHistory[wristHistory.length - 1];
 
@@ -319,11 +332,12 @@ async function loop() {
       const upwardY = first.y - last.y;
 
       const forwardX = Math.max(0, rawForwardX);
-      const power = forwardX + Math.max(0, upwardY) * 0.2;
+      const power = forwardX + Math.max(0, upwardY) * 0.18;
 
       const movedOutOfBox = !pointInRect(wristScreen.x, wristScreen.y, loadBox);
 
-      if (movedOutOfBox && forwardX > 40 && power > 45) {
+      // STRICTER TRIGGER THAN BEFORE
+      if (movedOutOfBox && forwardX > 58 && power > 62) {
         triggerThrow(power);
       } else {
         setStatus("Loaded. Throw forward now.");
@@ -363,18 +377,24 @@ function triggerThrow(power) {
   readyPoseFrames = 0;
   readyLockout = true;
   wristHistory = [];
+
+  // LONGER COOLDOWN
   throwCooldown = true;
 
   setStatus("Pitch launched.");
 
   setTimeout(() => {
     throwCooldown = false;
-    if (!gameOver) setStatus("Reload inside the blue box.");
-  }, 1100);
+    if (!gameOver && resultPauseTimer <= 0) {
+      setStatus("Now reset. Move your hand out, then reload in the blue box.");
+    }
+  }, 1600);
 }
 
 function updateGame() {
-  if (resultPauseTimer > 0) resultPauseTimer--;
+  if (resultPauseTimer > 0) {
+    resultPauseTimer--;
+  }
 
   if (ball && !gameOver) {
     ball.vy += 0.16;
@@ -386,7 +406,9 @@ function updateGame() {
     if (ball.x >= strikeZone.x) {
       resolvePitch();
       ball = null;
-      resultPauseTimer = 55;
+
+      // LONGER PAUSE AFTER RESULT
+      resultPauseTimer = 95;
     }
 
     if (ball && (ball.y > 700 || ball.x > gameCanvas.width + 40)) {
@@ -398,10 +420,12 @@ function updateGame() {
       playMiss();
 
       ball = null;
-      resultPauseTimer = 55;
+      resultPauseTimer = 95;
       checkGameOver();
 
-      if (!gameOver) setStatus("Miss. Reload inside the blue box.");
+      if (!gameOver) {
+        setStatus("Miss. Pause... reset your arm, then reload.");
+      }
     }
   }
 
@@ -494,7 +518,9 @@ function resolvePitch() {
 
   checkGameOver();
 
-  if (!gameOver) setStatus("Result locked. Reload inside the blue box.");
+  if (!gameOver) {
+    setStatus("Result locked. Pause... reset your arm, then reload.");
+  }
 }
 
 function checkGameOver() {
@@ -545,7 +571,6 @@ function spawnImpact(x, y, scale, color, strength) {
     });
   }
 
-  // add some colorful secondary rings for harder throws
   if (strength > 70) {
     const accentColors = ["#7fd6ff", "#ff9f43", "#ffe066", "#8dffb2"];
     for (let i = 0; i < 3; i++) {
@@ -619,7 +644,6 @@ function drawGame() {
 }
 
 function drawBackground() {
-  // darker BXCM-ish window wall inspired by your reference
   const sky = gameCtx.createLinearGradient(0, 0, 0, gameCanvas.height);
   sky.addColorStop(0, "#7ea4c5");
   sky.addColorStop(0.30, "#b7c6d3");
@@ -630,10 +654,8 @@ function drawBackground() {
   gameCtx.fillStyle = sky;
   gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
 
-  // window wall frame
   roundedRect(gameCtx, 0, 90, gameCanvas.width, 255, 0, "#5f7286", null);
 
-  // giant BRONX letters in windows
   const letters = [
     { ch: "B", x: 95, color: "rgba(247,215,78,0.55)" },
     { ch: "R", x: 360, color: "rgba(245,163,84,0.55)" },
@@ -642,7 +664,6 @@ function drawBackground() {
     { ch: "X", x: 1140, color: "rgba(130,221,92,0.48)" }
   ];
 
-  // window panes
   for (let col = 0; col < 5; col++) {
     const x = 60 + col * 260;
     roundedRect(gameCtx, x, 35, 205, 230, 0, "rgba(210,225,235,0.20)", "rgba(255,255,255,0.18)");
@@ -668,7 +689,6 @@ function drawBackground() {
     gameCtx.fillText(l.ch, l.x, 225);
   });
 
-  // skyline silhouettes
   gameCtx.fillStyle = "rgba(40,55,72,0.28)";
   for (let i = 0; i < 20; i++) {
     const x = 20 + i * 70;
@@ -676,7 +696,6 @@ function drawBackground() {
     gameCtx.fillRect(x, 210 - h, 28 + (i % 3) * 10, h);
   }
 
-  // branded outfield wall
   roundedRect(gameCtx, 0, 325, gameCanvas.width, 82, 0, "#2b3950", null);
 
   for (let i = 0; i < 6; i++) {
@@ -690,7 +709,6 @@ function drawBackground() {
     roundedRect(gameCtx, x - 48, 372, 34, 10, 3, "#e1ae3e", null);
   }
 
-  // field
   gameCtx.strokeStyle = "rgba(255,255,255,0.24)";
   gameCtx.lineWidth = 4;
   gameCtx.beginPath();
