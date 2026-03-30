@@ -207,6 +207,71 @@ function makeBurst(x, y, scale) {
 function drawGame() {
   gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
 
+  // =======================
+// BIG STADIUM BACKGROUND
+// =======================
+
+// sky + field
+const sky = gameCtx.createLinearGradient(0, 0, 0, gameCanvas.height);
+sky.addColorStop(0, "#6ec6ff");
+sky.addColorStop(0.45, "#dff4ff");
+sky.addColorStop(0.46, "#4aa658");
+sky.addColorStop(1, "#26753a");
+
+gameCtx.fillStyle = sky;
+gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
+
+// stadium seating deck
+gameCtx.fillStyle = "#24384f";
+gameCtx.fillRect(0, 110, gameCanvas.width, 70);
+
+// crowd dots
+for (let i = 0; i < 120; i++) {
+  gameCtx.fillStyle = `rgba(255,255,255,${0.15 + Math.random() * 0.35})`;
+
+  gameCtx.beginPath();
+  gameCtx.arc(
+    20 + i * 6,
+    120 + Math.random() * 45,
+    2 + Math.random() * 1.5,
+    0,
+    Math.PI * 2
+  );
+  gameCtx.fill();
+}
+
+// stadium lights
+for (let i = 0; i < 8; i++) {
+  gameCtx.fillStyle = "rgba(255,255,180,0.85)";
+
+  gameCtx.beginPath();
+  gameCtx.arc(60 + i * 95, 45, 9, 0, Math.PI * 2);
+  gameCtx.fill();
+}
+
+// back fence
+gameCtx.strokeStyle = "rgba(255,255,255,0.45)";
+gameCtx.lineWidth = 4;
+gameCtx.beginPath();
+gameCtx.moveTo(0, 280);
+gameCtx.lineTo(gameCanvas.width, 280);
+gameCtx.stroke();
+
+// grass stripes
+for (let i = 0; i < 8; i++) {
+  gameCtx.fillStyle =
+    i % 2 === 0
+      ? "rgba(255,255,255,0.04)"
+      : "rgba(0,0,0,0.04)";
+
+  gameCtx.fillRect(
+    0,
+    300 + i * 14,
+    gameCanvas.width,
+    14
+  );
+}
+  
   const sky = gameCtx.createLinearGradient(0, 0, 0, gameCanvas.height);
   sky.addColorStop(0, "#87ceeb");
   sky.addColorStop(0.5, "#87ceeb");
