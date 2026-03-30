@@ -1,16 +1,16 @@
-import {
-  PoseLandmarker,
-  FilesetResolver
-} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/vision_bundle.mjs";
-
 const video = document.getElementById("webcam");
-const statusText = document.getElementById("status");
-const startBtn = document.getElementById("startBtn");
 const overlay = document.getElementById("overlay");
 const overlayCtx = overlay.getContext("2d");
+const gameCanvas = document.getElementById("gameCanvas");
+const gameCtx = gameCanvas.getContext("2d");
+const startBtn = document.getElementById("startBtn");
+const statusText = document.getElementById("status");
 
-let poseLandmarker = null;
+let detector = null;
 let started = false;
+let wristHistory = [];
+let ball = null;
+let particles = [];
 
 startBtn.onclick = async () => {
   try {
@@ -32,22 +32,19 @@ startBtn.onclick = async () => {
     overlay.width = video.videoWidth || 640;
     overlay.height = video.videoHeight || 480;
 
-    statusText.innerText = "Loading pose tracker...";
+    statusText.innerText = "Loading pose detector...";
 
-    const vision = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
+    await tf.setBackend("webgl");
+    await tf.ready();
+
+    detector = await poseDetection.createDetector(
+      poseDetection.SupportedModels.MoveNet,
+      {
+        modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
+      }
     );
 
-    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
-      },
-      runningMode: "VIDEO",
-      numPoses: 1
-    });
-
-    statusText.innerText = "Pose ready. Stand where your upper body is visible.";
+    statusText.innerText = "Ready. Stand back so your upper body is visible.";
 
     if (!started) {
       started = true;
@@ -56,33 +53,143 @@ startBtn.onclick = async () => {
   } catch (err) {
     console.error(err);
     statusText.innerText = "Error: " + err.message;
+    alert("Error: " + err.message);
   }
 };
 
-function loop(time) {
+async function loop() {
   requestAnimationFrame(loop);
+
+  drawGame();
+  updateGame();
 
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-  if (!poseLandmarker || video.readyState < 2) return;
+  if (!detector || video.readyState < 2) return;
 
-  const result = poseLandmarker.detectForVideo(video, time);
+  try {
+    const poses = await detector.estimatePoses(video);
 
-  if (!result.landmarks || result.landmarks.length === 0) {
-    statusText.innerText = "No body detected. Step back a little.";
-    return;
+    if (!poses || poses.length === 0 || !poses[0].keypoints) {
+      statusText.innerText = "No body detected. Step back a little.";
+      return;
+    }
+
+    const keypoints = poses[0].keypoints;
+
+    const rightWrist = findKeypoint(keypoints, "right_wrist");
+    const rightShoulder = findKeypoint(keypoints, "right_shoulder");
+
+    if (!rightWrist || !rightShoulder || rightWrist.score < 0.25 || rightShoulder.score < 0.25) {
+      statusText.innerText = "Right arm not clear. Face camera and step back.";
+      return;
+    }
+
+    overlayCtx.beginPath();
+    overlayCtx.arc(rightWrist.x, rightWrist.y, 10, 0, Math.PI * 2);
+    overlayCtx.fillStyle = "yellow";
+    overlayCtx.fill();
+
+    statusText.innerText = "Body detected. Move your right arm forward.";
+
+    wristHistory.push({
+      x: rightWrist.x,
+      y: rightWrist.y,
+      t: performance.now()
+    });
+
+    if (wristHistory.length > 6) wristHistory.shift();
+
+    if (wristHistory.length >= 2) {
+      const first = wristHistory[0];
+      const last = wristHistory[wristHistory.length - 1];
+
+      const dx = last.x - first.x;
+      const dy = first.y - last.y;
+      const shoulderDistance = Math.abs(rightWrist.x - rightShoulder.x);
+
+      const power = Math.abs(dx) + Math.abs(dy) * 0.5;
+
+      if (power > 35 && shoulderDistance > 20 && !ball) {
+        throwBall(power);
+        wristHistory = [];
+        statusText.innerText = "Throw detected!";
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    statusText.innerText = "Pose error: " + err.message;
+  }
+}
+
+function findKeypoint(keypoints, name) {
+  return keypoints.find(k => k.name === name);
+}
+
+function throwBall(power) {
+  ball = {
+    x: 60,
+    y: 300,
+    vx: 8 + power * 0.18,
+    vy: -8 - power * 0.05
+  };
+}
+
+function updateGame() {
+  if (ball) {
+    ball.vy += 0.4;
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+
+    particles.push({
+      x: ball.x,
+      y: ball.y,
+      vx: Math.random() * 2 - 1,
+      vy: Math.random() * 2 - 1,
+      size: 4 + Math.random() * 6
+    });
+
+    if (ball.y > 350 || ball.x > gameCanvas.width - 20) {
+      explode(ball.x, Math.min(ball.y, 350));
+      ball = null;
+    }
   }
 
-  statusText.innerText = "Body detected.";
+  particles.forEach((p) => {
+    p.x += p.vx || 0;
+    p.y += p.vy || 0;
+    p.size *= 0.95;
+  });
 
-  const lm = result.landmarks[0];
-  const rightWrist = lm[16];
+  particles = particles.filter((p) => p.size > 1);
+}
 
-  const x = rightWrist.x * overlay.width;
-  const y = rightWrist.y * overlay.height;
+function explode(x, y) {
+  for (let i = 0; i < 35; i++) {
+    particles.push({
+      x,
+      y,
+      vx: Math.random() * 8 - 4,
+      vy: Math.random() * 8 - 4,
+      size: 5 + Math.random() * 10
+    });
+  }
+}
 
-  overlayCtx.beginPath();
-  overlayCtx.arc(x, y, 10, 0, Math.PI * 2);
-  overlayCtx.fillStyle = "yellow";
-  overlayCtx.fill();
+function drawGame() {
+  gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
+
+  if (ball) {
+    gameCtx.beginPath();
+    gameCtx.arc(ball.x, ball.y, 10, 0, Math.PI * 2);
+    gameCtx.fillStyle = "white";
+    gameCtx.fill();
+  }
+
+  particles.forEach((p) => {
+    gameCtx.beginPath();
+    gameCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    gameCtx.fillStyle = "orange";
+    gameCtx.fill();
+  });
 }
