@@ -21,23 +21,28 @@
       </div>
     </header>
 
-    <div class="statusRow">
-      <div id="status">Waiting...</div>
-    </div>
-
     <main class="mainGrid">
       <section class="posePanel">
         <div class="panelTitle">Player Silhouette</div>
+
         <div class="videoWrap">
           <video id="webcam" autoplay playsinline muted></video>
           <canvas id="overlay"></canvas>
           <div class="videoTint"></div>
         </div>
+
+        <div id="status" class="statusBanner">Waiting...</div>
+
+        <div class="debugReadout">
+          <div><span>Mode:</span> <strong id="debugMode">idle</strong></div>
+          <div><span>Load:</span> <strong id="debugLoad">0</strong></div>
+          <div><span>Power:</span> <strong id="debugPower">0</strong></div>
+        </div>
       </section>
 
       <section class="gamePanel">
         <div class="panelTitle">Pitch Field</div>
-        <canvas id="gameCanvas" width="1400" height="760"></canvas>
+        <canvas id="gameCanvas" width="1500" height="820"></canvas>
       </section>
     </main>
   </div>
