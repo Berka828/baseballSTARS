@@ -37,6 +37,10 @@ let readyPoseArmed = false;
 let readyPoseFrames = 0;
 let readyLockout = false;
 
+// live debug pose box
+let loadBox = null;
+let wristScreen = null;
+
 // layout
 const strikeZone = { x: 1135, y: 265, w: 120, h: 170 };
 const mitt = { x: 1195, y: 350, r: 52, glow: 0.5 };
@@ -138,7 +142,7 @@ startBtn.onclick = async () => {
       cameraStarted = true;
     }
 
-    setStatus("Bring your throwing hand near your shoulder.");
+    setStatus("Move your throwing hand into the blue box.");
     if (!started) {
       started = true;
       requestAnimationFrame(loop);
@@ -177,9 +181,11 @@ function resetGame() {
   readyPoseArmed = false;
   readyPoseFrames = 0;
   readyLockout = false;
+  loadBox = null;
+  wristScreen = null;
 
   playReset();
-  setStatus("Game reset. Bring your hand near your shoulder.");
+  setStatus("Game reset. Move your throwing hand into the blue box.");
   drawGame();
 }
 
@@ -203,52 +209,85 @@ async function loop() {
     }
 
     const keypoints = poses[0].keypoints;
-    drawSilhouette(keypoints);
 
     const rightWrist = findKeypoint(keypoints, "right_wrist");
     const rightShoulder = findKeypoint(keypoints, "right_shoulder");
+    const rightHip = findKeypoint(keypoints, "right_hip");
+    const leftShoulder = findKeypoint(keypoints, "left_shoulder");
 
     if (
-      !rightWrist || !rightShoulder ||
+      !rightWrist || !rightShoulder || !rightHip || !leftShoulder ||
       rightWrist.score < 0.25 ||
-      rightShoulder.score < 0.25
+      rightShoulder.score < 0.25 ||
+      rightHip.score < 0.25 ||
+      leftShoulder.score < 0.25
     ) {
-      setStatus("Right arm not clear. Face camera and step back.");
+      setStatus("Upper body not clear. Face camera and step back.");
       return;
     }
+
+    // convert landmarks to screen coords
+    wristScreen = {
+      x: rightWrist.x * overlay.width,
+      y: rightWrist.y * overlay.height
+    };
+
+    const shoulderScreen = {
+      x: rightShoulder.x * overlay.width,
+      y: rightShoulder.y * overlay.height
+    };
+
+    const hipScreen = {
+      x: rightHip.x * overlay.width,
+      y: rightHip.y * overlay.height
+    };
+
+    const leftShoulderScreen = {
+      x: leftShoulder.x * overlay.width,
+      y: leftShoulder.y * overlay.height
+    };
+
+    // build a much more forgiving "load box"
+    const torsoHeight = Math.abs(hipScreen.y - shoulderScreen.y);
+    const shoulderSpan = Math.abs(shoulderScreen.x - leftShoulderScreen.x);
+
+    loadBox = {
+      x: shoulderScreen.x - Math.max(shoulderSpan * 0.15, 20),
+      y: shoulderScreen.y - Math.max(torsoHeight * 0.35, 40),
+      w: Math.max(shoulderSpan * 0.95, 95),
+      h: Math.max(torsoHeight * 0.75, 110)
+    };
+
+    drawSilhouette(keypoints);
 
     if (gameOver || throwCooldown || resultPauseTimer > 0 || ball) return;
 
     wristHistory.push({
-      x: rightWrist.x,
-      y: rightWrist.y,
+      x: wristScreen.x,
+      y: wristScreen.y,
       t: performance.now()
     });
     if (wristHistory.length > 14) wristHistory.shift();
 
-    // Simpler load logic:
-    // create a forgiving rectangular "load box" around the shoulder
-    const dxShoulder = Math.abs(rightWrist.x - rightShoulder.x);
-    const dyShoulder = Math.abs(rightWrist.y - rightShoulder.y);
-    const loadedPose = dxShoulder < 0.18 && dyShoulder < 0.18;
+    const wristInLoadBox = pointInRect(wristScreen.x, wristScreen.y, loadBox);
 
     if (!readyPoseArmed) {
       if (!readyLockout) {
-        if (loadedPose) {
+        if (wristInLoadBox) {
           readyPoseFrames++;
           setStatus("Hold... loaded pose found.");
         } else {
           readyPoseFrames = 0;
-          setStatus("Bring your hand near your shoulder.");
+          setStatus("Move your throwing hand into the blue box.");
         }
 
         if (readyPoseFrames >= 4) {
           readyPoseArmed = true;
-          setStatus("Loaded. Throw your arm forward now.");
+          setStatus("Loaded. Throw forward now.");
         }
       } else {
-        setStatus("Move your hand away, then reload near your shoulder.");
-        if (!loadedPose) readyLockout = false;
+        setStatus("Move your hand out, then back into the blue box.");
+        if (!wristInLoadBox) readyLockout = false;
       }
       return;
     }
@@ -257,17 +296,16 @@ async function loop() {
       const first = wristHistory[0];
       const last = wristHistory[wristHistory.length - 1];
 
-      const moveX = (last.x - first.x) * overlay.width;
-      const moveY = (first.y - last.y) * overlay.height;
-      const power = Math.abs(moveX) + Math.max(0, moveY) * 0.22;
+      const moveX = last.x - first.x;
+      const moveY = first.y - last.y;
+      const power = Math.abs(moveX) + Math.max(0, moveY) * 0.2;
 
-      // require hand to move away from shoulder box after loading
-      const movedAwayFromShoulder = dxShoulder > 0.16 || dyShoulder > 0.16;
+      const movedOutOfBox = !pointInRect(wristScreen.x, wristScreen.y, loadBox);
 
-      if (movedAwayFromShoulder && power > 26) {
+      if (movedOutOfBox && power > 18) {
         triggerThrow(power);
       } else {
-        setStatus("Loaded. Throw your arm forward now.");
+        setStatus("Loaded. Throw forward now.");
       }
     }
   } catch (err) {
@@ -278,19 +316,19 @@ async function loop() {
 
 // throw / scoring
 function triggerThrow(power) {
-  const strength = Math.min(power, 120);
-  currentPower = Math.min(280, strength * 2.1);
+  const strength = Math.min(power, 110);
+  currentPower = Math.min(280, strength * 2.2);
 
-  if (strength < 45) lastThrowLabel = "SOFT TOSS";
-  else if (strength < 65) lastThrowLabel = "FAST BALL";
-  else if (strength < 90) lastThrowLabel = "POWER PITCH";
+  if (strength < 35) lastThrowLabel = "SOFT TOSS";
+  else if (strength < 52) lastThrowLabel = "FAST BALL";
+  else if (strength < 74) lastThrowLabel = "POWER PITCH";
   else lastThrowLabel = "SUPER HEATER";
 
   ball = {
     x: 175,
     y: 500,
-    vx: 6.5 + strength * 0.07,
-    vy: -4.5 - strength * 0.018,
+    vx: 6.2 + strength * 0.075,
+    vy: -4.3 - strength * 0.018,
     r: 14
   };
 
@@ -308,7 +346,7 @@ function triggerThrow(power) {
 
   setTimeout(() => {
     throwCooldown = false;
-    if (!gameOver) setStatus("Reload your arm near your shoulder.");
+    if (!gameOver) setStatus("Reload inside the blue box.");
   }, 1100);
 }
 
@@ -341,7 +379,7 @@ function updateGame() {
       resultPauseTimer = 55;
       checkGameOver();
 
-      if (!gameOver) setStatus("Miss. Reload your arm.");
+      if (!gameOver) setStatus("Miss. Reload inside the blue box.");
     }
   }
 
@@ -423,7 +461,7 @@ function resolvePitch() {
 
   checkGameOver();
 
-  if (!gameOver) setStatus("Result locked. Reload your arm.");
+  if (!gameOver) setStatus("Result locked. Reload inside the blue box.");
 }
 
 function checkGameOver() {
@@ -518,7 +556,6 @@ function drawBackground() {
   gameCtx.fillStyle = sky;
   gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
 
-  // softer skyline instead of dark glitter strip
   gameCtx.fillStyle = "rgba(41,68,96,0.55)";
   for (let i = 0; i < 20; i++) {
     const x = 40 + i * 70;
@@ -526,7 +563,6 @@ function drawBackground() {
     gameCtx.fillRect(x, 300 - h, 34, h);
   }
 
-  // distant crowd/lights, subtle
   for (let i = 0; i < 120; i++) {
     gameCtx.fillStyle = `rgba(255,255,255,${0.05 + Math.random() * 0.12})`;
     gameCtx.beginPath();
@@ -807,9 +843,22 @@ function drawEndScreen() {
   gameCtx.fillText("Press Reset Game to play again", 555, 425);
 }
 
-// silhouette
+// silhouette + debug box
 function drawSilhouette(keypoints) {
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+
+  // load box
+  if (loadBox) {
+    overlayCtx.fillStyle = readyPoseArmed
+      ? "rgba(0,255,140,0.18)"
+      : "rgba(70,170,255,0.18)";
+    overlayCtx.strokeStyle = readyPoseArmed
+      ? "rgba(0,255,140,0.95)"
+      : "rgba(70,170,255,0.95)";
+    overlayCtx.lineWidth = 3;
+    overlayCtx.fillRect(loadBox.x, loadBox.y, loadBox.w, loadBox.h);
+    overlayCtx.strokeRect(loadBox.x, loadBox.y, loadBox.w, loadBox.h);
+  }
 
   overlayCtx.strokeStyle = "rgba(111,214,255,0.95)";
   overlayCtx.lineWidth = 6;
@@ -828,16 +877,15 @@ function drawSilhouette(keypoints) {
     if (k.score > 0.25) {
       overlayCtx.fillStyle = "rgba(255,230,120,0.92)";
       overlayCtx.beginPath();
-      overlayCtx.arc(k.x, k.y, 5, 0, Math.PI * 2);
+      overlayCtx.arc(k.x * overlay.width, k.y * overlay.height, 5, 0, Math.PI * 2);
       overlayCtx.fill();
     }
   });
 
-  const wrist = findKeypoint(keypoints, "right_wrist");
-  if (wrist && wrist.score > 0.25) {
+  if (wristScreen) {
     overlayCtx.fillStyle = "rgba(255,255,255,0.95)";
     overlayCtx.beginPath();
-    overlayCtx.arc(wrist.x, wrist.y, 11, 0, Math.PI * 2);
+    overlayCtx.arc(wristScreen.x, wristScreen.y, 11, 0, Math.PI * 2);
     overlayCtx.fill();
   }
 }
@@ -848,14 +896,18 @@ function drawBone(keypoints, aName, bName) {
   if (!a || !b || a.score < 0.25 || b.score < 0.25) return;
 
   overlayCtx.beginPath();
-  overlayCtx.moveTo(a.x, a.y);
-  overlayCtx.lineTo(b.x, b.y);
+  overlayCtx.moveTo(a.x * overlay.width, a.y * overlay.height);
+  overlayCtx.lineTo(b.x * overlay.width, b.y * overlay.height);
   overlayCtx.stroke();
 }
 
 // helpers
 function findKeypoint(keypoints, name) {
   return keypoints.find((k) => k.name === name);
+}
+
+function pointInRect(x, y, r) {
+  return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 }
 
 function hexToRgba(hex, alpha) {
