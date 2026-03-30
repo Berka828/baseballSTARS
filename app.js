@@ -11,7 +11,6 @@ let detector = null;
 let started = false;
 let cameraStarted = false;
 
-// gameplay
 let ball = null;
 let particles = [];
 let rings = [];
@@ -29,7 +28,6 @@ let lastThrowLabel = "READY";
 let scoreFlash = "";
 let scoreFlashTimer = 0;
 
-// throw state
 let wristHistory = [];
 let throwCooldown = false;
 let resultPauseTimer = 0;
@@ -37,20 +35,17 @@ let readyPoseArmed = false;
 let readyPoseFrames = 0;
 let readyLockout = false;
 
-// live debug pose box
 let loadBox = null;
 let wristScreen = null;
 
-// layout
 const strikeZone = { x: 1135, y: 265, w: 120, h: 170 };
 const mitt = { x: 1195, y: 350, r: 52, glow: 0.5 };
 const miniMap = { x: 40, y: 620, w: 280, h: 105 };
 
-// Direction selector
-// If throws are still reversed, change this to -1
+// Change to -1 if throw direction feels reversed
 const FORWARD_DIRECTION = 1;
 
-// larger status UI under camera panel
+// Move + style status under camera panel
 (function improveStatusUI() {
   const posePanel = document.querySelector(".posePanel");
   if (posePanel && statusText) {
@@ -74,7 +69,7 @@ function setStatus(msg) {
   statusText.textContent = msg;
 }
 
-// audio
+// ---------- audio ----------
 let audioCtx = null;
 function ensureAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -111,7 +106,7 @@ function playPerfect() {
 function playMiss() { playTone(220, 0.14, "sawtooth", 0.035, 140); }
 function playReset() { playTone(520, 0.06, "triangle", 0.03); }
 
-// buttons
+// ---------- buttons ----------
 startBtn.onclick = async () => {
   try {
     ensureAudio();
@@ -130,8 +125,9 @@ startBtn.onclick = async () => {
       });
       await video.play();
 
-      overlay.width = video.videoWidth || 640;
-      overlay.height = video.videoHeight || 800;
+      // Match overlay internal size to actual displayed video size
+      overlay.width = video.videoWidth || video.clientWidth || 640;
+      overlay.height = video.videoHeight || video.clientHeight || 480;
 
       setStatus("Loading pose detector...");
 
@@ -193,7 +189,7 @@ function resetGame() {
   drawGame();
 }
 
-// main loop
+// ---------- main loop ----------
 async function loop() {
   requestAnimationFrame(loop);
 
@@ -230,28 +226,27 @@ async function loop() {
       return;
     }
 
-    // convert landmarks to screen coords
+    // IMPORTANT: MoveNet keypoints are already in PIXELS.
     wristScreen = {
-      x: rightWrist.x * overlay.width,
-      y: rightWrist.y * overlay.height
+      x: rightWrist.x,
+      y: rightWrist.y
     };
 
     const shoulderScreen = {
-      x: rightShoulder.x * overlay.width,
-      y: rightShoulder.y * overlay.height
+      x: rightShoulder.x,
+      y: rightShoulder.y
     };
 
     const hipScreen = {
-      x: rightHip.x * overlay.width,
-      y: rightHip.y * overlay.height
+      x: rightHip.x,
+      y: rightHip.y
     };
 
     const leftShoulderScreen = {
-      x: leftShoulder.x * overlay.width,
-      y: leftShoulder.y * overlay.height
+      x: leftShoulder.x,
+      y: leftShoulder.y
     };
 
-    // forgiving "load box"
     const torsoHeight = Math.abs(hipScreen.y - shoulderScreen.y);
     const shoulderSpan = Math.abs(shoulderScreen.x - leftShoulderScreen.x);
 
@@ -300,8 +295,6 @@ async function loop() {
       const first = wristHistory[0];
       const last = wristHistory[wristHistory.length - 1];
 
-      // DIRECTIONAL FIX:
-      // only one horizontal direction counts as the throw
       const rawForwardX = (last.x - first.x) * FORWARD_DIRECTION;
       const upwardY = first.y - last.y;
 
@@ -322,7 +315,7 @@ async function loop() {
   }
 }
 
-// throw / scoring
+// ---------- throw / scoring ----------
 function triggerThrow(power) {
   const strength = Math.min(power, 110);
   currentPower = Math.min(280, strength * 2.2);
@@ -485,7 +478,7 @@ function checkGameOver() {
   }
 }
 
-// visual FX
+// ---------- fx ----------
 function addTrail(x, y) {
   for (let i = 0; i < 4; i++) {
     particles.push({
@@ -538,7 +531,7 @@ function spawnConfetti(x, y, count) {
   }
 }
 
-// draw
+// ---------- draw ----------
 function drawGame() {
   gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
 
@@ -851,7 +844,7 @@ function drawEndScreen() {
   gameCtx.fillText("Press Reset Game to play again", 555, 425);
 }
 
-// silhouette + debug box
+// ---------- silhouette ----------
 function drawSilhouette(keypoints) {
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
@@ -884,7 +877,7 @@ function drawSilhouette(keypoints) {
     if (k.score > 0.25) {
       overlayCtx.fillStyle = "rgba(255,230,120,0.92)";
       overlayCtx.beginPath();
-      overlayCtx.arc(k.x * overlay.width, k.y * overlay.height, 5, 0, Math.PI * 2);
+      overlayCtx.arc(k.x, k.y, 5, 0, Math.PI * 2);
       overlayCtx.fill();
     }
   });
@@ -903,12 +896,12 @@ function drawBone(keypoints, aName, bName) {
   if (!a || !b || a.score < 0.25 || b.score < 0.25) return;
 
   overlayCtx.beginPath();
-  overlayCtx.moveTo(a.x * overlay.width, a.y * overlay.height);
-  overlayCtx.lineTo(b.x * overlay.width, b.y * overlay.height);
+  overlayCtx.moveTo(a.x, a.y);
+  overlayCtx.lineTo(b.x, b.y);
   overlayCtx.stroke();
 }
 
-// helpers
+// ---------- helpers ----------
 function findKeypoint(keypoints, name) {
   return keypoints.find((k) => k.name === name);
 }
