@@ -12,6 +12,14 @@ let wristHistory = [];
 let ball = null;
 let particles = [];
 let throwCooldown = false;
+let currentPower = 0;
+let lastThrowLabel = "READY";
+let strikeZone = {
+  x: 690,
+  y: 180,
+  w: 60,
+  h: 90
+};
 
 startBtn.onclick = async () => {
   try {
@@ -149,6 +157,18 @@ function findKeypoint(keypoints, name) {
 function throwBall(power) {
   const strength = Math.min(power, 180);
 
+  currentPower = Math.min(200, strength);
+
+  if (strength < 60) {
+    lastThrowLabel = "SOFT TOSS";
+  } else if (strength < 90) {
+    lastThrowLabel = "FAST BALL";
+  } else if (strength < 125) {
+    lastThrowLabel = "POWER PITCH";
+  } else {
+    lastThrowLabel = "SUPER HEATER";
+  }
+
   ball = {
     x: 85,
     y: 305,
@@ -208,92 +228,137 @@ function drawGame() {
   gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
 
   // =======================
-// BIG STADIUM BACKGROUND
-// =======================
-
-// sky + field
-const sky = gameCtx.createLinearGradient(0, 0, 0, gameCanvas.height);
-sky.addColorStop(0, "#6ec6ff");
-sky.addColorStop(0.45, "#dff4ff");
-sky.addColorStop(0.46, "#4aa658");
-sky.addColorStop(1, "#26753a");
-
-gameCtx.fillStyle = sky;
-gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
-
-// stadium seating deck
-gameCtx.fillStyle = "#24384f";
-gameCtx.fillRect(0, 110, gameCanvas.width, 70);
-
-// crowd dots
-for (let i = 0; i < 120; i++) {
-  gameCtx.fillStyle = `rgba(255,255,255,${0.15 + Math.random() * 0.35})`;
-
-  gameCtx.beginPath();
-  gameCtx.arc(
-    20 + i * 6,
-    120 + Math.random() * 45,
-    2 + Math.random() * 1.5,
-    0,
-    Math.PI * 2
-  );
-  gameCtx.fill();
-}
-
-// stadium lights
-for (let i = 0; i < 8; i++) {
-  gameCtx.fillStyle = "rgba(255,255,180,0.85)";
-
-  gameCtx.beginPath();
-  gameCtx.arc(60 + i * 95, 45, 9, 0, Math.PI * 2);
-  gameCtx.fill();
-}
-
-// back fence
-gameCtx.strokeStyle = "rgba(255,255,255,0.45)";
-gameCtx.lineWidth = 4;
-gameCtx.beginPath();
-gameCtx.moveTo(0, 280);
-gameCtx.lineTo(gameCanvas.width, 280);
-gameCtx.stroke();
-
-// grass stripes
-for (let i = 0; i < 8; i++) {
-  gameCtx.fillStyle =
-    i % 2 === 0
-      ? "rgba(255,255,255,0.04)"
-      : "rgba(0,0,0,0.04)";
-
-  gameCtx.fillRect(
-    0,
-    300 + i * 14,
-    gameCanvas.width,
-    14
-  );
-}
-  
+  // 1. BIG STADIUM BACKGROUND
+  // =======================
   const sky = gameCtx.createLinearGradient(0, 0, 0, gameCanvas.height);
-  sky.addColorStop(0, "#87ceeb");
-  sky.addColorStop(0.5, "#87ceeb");
-  sky.addColorStop(0.5, "#3cb371");
-  sky.addColorStop(1, "#3cb371");
+  sky.addColorStop(0, "#6ec6ff");
+  sky.addColorStop(0.45, "#dff4ff");
+  sky.addColorStop(0.46, "#4aa658");
+  sky.addColorStop(1, "#26753a");
+
   gameCtx.fillStyle = sky;
   gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
 
-  // ground line
-  gameCtx.strokeStyle = "rgba(255,255,255,0.5)";
-  gameCtx.lineWidth = 2;
+  // stadium seating deck
+  gameCtx.fillStyle = "#24384f";
+  gameCtx.fillRect(0, 110, gameCanvas.width, 70);
+
+  // crowd dots
+  for (let i = 0; i < 120; i++) {
+    gameCtx.fillStyle = `rgba(255,255,255,${0.15 + Math.random() * 0.25})`;
+    gameCtx.beginPath();
+    gameCtx.arc(
+      20 + i * 6,
+      120 + Math.random() * 45,
+      2 + Math.random() * 1.5,
+      0,
+      Math.PI * 2
+    );
+    gameCtx.fill();
+  }
+
+  // stadium lights
+  for (let i = 0; i < 8; i++) {
+    gameCtx.fillStyle = "rgba(255,255,180,0.85)";
+    gameCtx.beginPath();
+    gameCtx.arc(60 + i * 95, 45, 9, 0, Math.PI * 2);
+    gameCtx.fill();
+  }
+
+  // back fence
+  gameCtx.strokeStyle = "rgba(255,255,255,0.45)";
+  gameCtx.lineWidth = 4;
   gameCtx.beginPath();
-  gameCtx.moveTo(0, 345);
-  gameCtx.lineTo(gameCanvas.width, 345);
+  gameCtx.moveTo(0, 280);
+  gameCtx.lineTo(gameCanvas.width, 280);
   gameCtx.stroke();
 
-  // throw origin
+  // grass stripes
+  for (let i = 0; i < 8; i++) {
+    gameCtx.fillStyle =
+      i % 2 === 0
+        ? "rgba(255,255,255,0.04)"
+        : "rgba(0,0,0,0.04)";
+
+    gameCtx.fillRect(0, 300 + i * 14, gameCanvas.width, 14);
+  }
+
+  // throw mound
   gameCtx.fillStyle = "#c98b52";
   gameCtx.beginPath();
   gameCtx.ellipse(85, 315, 30, 10, 0, 0, Math.PI * 2);
   gameCtx.fill();
 
+  // =======================
+  // 2. STRIKE ZONE TARGET
+  // =======================
+  gameCtx.strokeStyle = "white";
+  gameCtx.lineWidth = 4;
+  gameCtx.strokeRect(strikeZone.x, strikeZone.y, strikeZone.w, strikeZone.h);
+
+  // inner target box
+  gameCtx.strokeStyle = "rgba(255,215,0,0.9)";
+  gameCtx.lineWidth = 2;
+  gameCtx.strokeRect(
+    strikeZone.x + 12,
+    strikeZone.y + 18,
+    strikeZone.w - 24,
+    strikeZone.h - 36
+  );
+
+  // label
+  gameCtx.fillStyle = "rgba(0,0,0,0.45)";
+  gameCtx.fillRect(strikeZone.x - 10, strikeZone.y - 34, 110, 24);
+  gameCtx.fillStyle = "white";
+  gameCtx.font = "bold 14px Arial";
+  gameCtx.fillText("STRIKE ZONE", strikeZone.x, strikeZone.y - 16);
+
+  // =======================
+  // 3. SPEED / POWER METER
+  // =======================
+  gameCtx.fillStyle = "rgba(0,0,0,0.5)";
+  gameCtx.fillRect(20, 20, 220, 24);
+
+  let meterColor = "#4db8ff";
+  if (currentPower > 50) meterColor = "#ffe066";
+  if (currentPower > 90) meterColor = "#ff9f43";
+  if (currentPower > 130) meterColor = "#ff4d4d";
+
+  gameCtx.fillStyle = meterColor;
+  gameCtx.fillRect(20, 20, Math.min(currentPower, 220), 24);
+
+  gameCtx.strokeStyle = "white";
+  gameCtx.lineWidth = 2;
+  gameCtx.strokeRect(20, 20, 220, 24);
+
+  gameCtx.fillStyle = "white";
+  gameCtx.font = "bold 14px Arial";
+  gameCtx.fillText("PITCH POWER", 20, 16);
+
+  // =======================
+  // 4. BIG THROW FEEDBACK TEXT
+  // =======================
+  gameCtx.font = "bold 38px Arial";
+  gameCtx.textAlign = "center";
+
+  if (lastThrowLabel === "SOFT TOSS") {
+    gameCtx.fillStyle = "#d6f0ff";
+  } else if (lastThrowLabel === "FAST BALL") {
+    gameCtx.fillStyle = "#ffe066";
+  } else if (lastThrowLabel === "POWER PITCH") {
+    gameCtx.fillStyle = "#ff9f43";
+  } else if (lastThrowLabel === "SUPER HEATER") {
+    gameCtx.fillStyle = "#ff4d4d";
+  } else {
+    gameCtx.fillStyle = "white";
+  }
+
+  gameCtx.fillText(lastThrowLabel, gameCanvas.width / 2, 70);
+  gameCtx.textAlign = "start";
+
+  // =======================
+  // 5. BALL
+  // =======================
   if (ball) {
     gameCtx.beginPath();
     gameCtx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
@@ -311,6 +376,9 @@ for (let i = 0; i < 8; i++) {
     gameCtx.stroke();
   }
 
+  // =======================
+  // 6. PARTICLES
+  // =======================
   particles.forEach((p) => {
     gameCtx.fillStyle = `rgba(255,165,0,${p.alpha})`;
     gameCtx.beginPath();
