@@ -442,8 +442,8 @@ function resolvePitch() {
 
   // tighter vertical windows
   const perfectWindow = 8;
-  const strikeWindowTop = zoneTop + 12;
-  const strikeWindowBottom = zoneBottom - 12;
+  const strikeWindowTop = zoneTop + 24;
+  const strikeWindowBottom = zoneBottom - 24;
 
   const isPerfect = distanceFromCenter <= perfectWindow;
   const isStrike = y >= strikeWindowTop && y <= strikeWindowBottom;
