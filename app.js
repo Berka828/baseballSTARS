@@ -433,49 +433,71 @@ function updateGame() {
 function resolvePitch() {
   pitchCount++;
 
-  const centerY = strikeZone.y + strikeZone.h / 2;
-  const distanceFromCenter = Math.abs(ball.y - centerY);
-  const inZone = ball.y >= strikeZone.y && ball.y <= strikeZone.y + strikeZone.h;
+  function resolvePitch() {
+  pitchCount++;
 
-  if (inZone) {
-    if (distanceFromCenter < 20) {
-      score += 200;
-      scoreFlash = "PERFECT +200";
-      scoreFlashTimer = 78;
+  const zoneTop = strikeZone.y;
+  const zoneBottom = strikeZone.y + strikeZone.h;
+  const zoneCenterY = strikeZone.y + strikeZone.h / 2;
 
-      makeBurst(ball.x, ball.y, 2.4, "#ffe066");
-      makeRing(ball.x, ball.y, "#ffe066");
-      addFlash("#ffe066");
-      spawnConfetti(ball.x, ball.y, 26);
-      playPerfect();
-    } else {
-      score += 100;
-      scoreFlash = "STRIKE +100";
-      scoreFlashTimer = 68;
+  const y = ball.y;
+  const distanceFromCenter = Math.abs(y - zoneCenterY);
 
-      makeBurst(ball.x, ball.y, 1.8, "#8dffb2");
-      makeRing(ball.x, ball.y, "#8dffb2");
-      addFlash("#8dffb2");
-      spawnConfetti(ball.x, ball.y, 12);
-      playStrike();
-    }
+  // tighter vertical windows
+  const perfectWindow = 8;
+  const strikeWindowTop = zoneTop + 12;
+  const strikeWindowBottom = zoneBottom - 12;
 
-    if (currentPower > 165) {
-      score += 50;
-      scoreFlash += "  HEAT +50";
-      scoreFlashTimer = 80;
-    }
-  } else {
-    scoreFlash = "BALL";
+  const isPerfect = distanceFromCenter <= perfectWindow;
+  const isStrike = y >= strikeWindowTop && y <= strikeWindowBottom;
+
+  if (isPerfect) {
+    score += 200;
+    scoreFlash = "PERFECT +200";
+    scoreFlashTimer = 78;
+
+    makeBurst(ball.x, ball.y, 2.4, "#ffe066");
+    makeRing(ball.x, ball.y, "#ffe066");
+    addFlash("#ffe066");
+    spawnConfetti(ball.x, ball.y, 26);
+    playPerfect();
+  } else if (isStrike) {
+    score += 100;
+    scoreFlash = "STRIKE +100";
+    scoreFlashTimer = 68;
+
+    makeBurst(ball.x, ball.y, 1.8, "#8dffb2");
+    makeRing(ball.x, ball.y, "#8dffb2");
+    addFlash("#8dffb2");
+    spawnConfetti(ball.x, ball.y, 12);
+    playStrike();
+  } else if (y < zoneTop) {
+    scoreFlash = "HIGH BALL";
     scoreFlashTimer = 58;
+
+    makeBurst(ball.x, ball.y, 1.2, "#ff9f7a");
+    makeRing(ball.x, ball.y, "#ff9f7a");
+    playMiss();
+  } else {
+    scoreFlash = "LOW BALL";
+    scoreFlashTimer = 58;
+
     makeBurst(ball.x, ball.y, 1.2, "#ff9f7a");
     makeRing(ball.x, ball.y, "#ff9f7a");
     playMiss();
   }
 
+  if ((isPerfect || isStrike) && currentPower > 165) {
+    score += 50;
+    scoreFlash += "  HEAT +50";
+    scoreFlashTimer = 80;
+  }
+
   checkGameOver();
 
-  if (!gameOver) setStatus("Result locked. Reload inside the blue box.");
+  if (!gameOver) {
+    setStatus("Result locked. Reload inside the blue box.");
+  }
 }
 
 function checkGameOver() {
@@ -659,19 +681,32 @@ function drawStrikeZone() {
   gameCtx.fillStyle = "rgba(0,0,0,0.18)";
   gameCtx.fillRect(strikeZone.x - 18, strikeZone.y - 18, strikeZone.w + 36, strikeZone.h + 36);
 
+  // outer frame
   gameCtx.strokeStyle = "white";
   gameCtx.lineWidth = 6;
   gameCtx.strokeRect(strikeZone.x, strikeZone.y, strikeZone.w, strikeZone.h);
 
+  // strike area
+  gameCtx.strokeStyle = "rgba(140,255,180,0.95)";
+  gameCtx.lineWidth = 3;
+  gameCtx.strokeRect(
+    strikeZone.x + 8,
+    strikeZone.y + 12,
+    strikeZone.w - 16,
+    strikeZone.h - 24
+  );
+
+  // perfect area
   gameCtx.strokeStyle = "rgba(255,215,0,0.95)";
   gameCtx.lineWidth = 3;
   gameCtx.strokeRect(
-    strikeZone.x + 20,
-    strikeZone.y + 26,
-    strikeZone.w - 40,
-    strikeZone.h - 52
+    strikeZone.x + 24,
+    strikeZone.y + strikeZone.h / 2 - 14,
+    strikeZone.w - 48,
+    28
   );
 
+  // crosshair
   gameCtx.strokeStyle = "rgba(255,255,255,0.18)";
   gameCtx.lineWidth = 2;
   gameCtx.beginPath();
