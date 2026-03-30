@@ -3,16 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Camera Test</title>
+  <title>Motion Pitch Pop</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <h1>Camera Test</h1>
+  <h1>⚾ Motion Pitch Pop</h1>
   <button id="startBtn">Start Camera</button>
   <p id="status">Waiting...</p>
 
-  <video id="webcam" autoplay playsinline muted></video>
+  <div class="videoWrap">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
 
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
