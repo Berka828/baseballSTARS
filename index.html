@@ -23,8 +23,6 @@
     </div>
 
     <div class="mainGrid">
-
-      <!-- LEFT PANEL -->
       <div class="posePanel">
         <div class="panelTitle">Player Silhouette</div>
 
@@ -34,25 +32,23 @@
           <div class="videoTint"></div>
         </div>
 
-        <div id="status">
-          Move your throwing hand into the blue box.
-        </div>
+        <div id="status">Move your throwing hand into the blue box.</div>
       </div>
 
-      <!-- RIGHT PANEL -->
       <div class="gamePanel">
         <div class="panelTitle">Pitch Field</div>
         <canvas id="gameCanvas" width="1400" height="820"></canvas>
       </div>
-
     </div>
   </div>
 
-  <!-- LIBRARIES -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0"></script>
+  <!-- TensorFlow / Pose Detection -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
 
-  <!-- GAME SCRIPT -->
+  <!-- Game -->
   <script src="app.js"></script>
 </body>
 </html>
