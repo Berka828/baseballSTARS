@@ -20,7 +20,7 @@ let readyLockout = false;
 let throwCooldown = false;
 let resultPauseTimer = 0;
 
-let phase = "LOAD"; // LOAD / THROW / FOLLOW / RESET / DONE
+let phase = "LOAD"; // LOAD / FOLLOW / RESET / DONE
 let feedbackText = "READY";
 let feedbackTimer = 0;
 
@@ -49,7 +49,10 @@ let flashes = [];
 let confetti = [];
 let characterBall = null;
 
+let armReady = false;
+let armReadyPulse = 0;
 const FORWARD_DIRECTION = 1;
+const releaseThreshold = 60;
 
 const BX = {
   yellow: "#f1c94c",
@@ -130,7 +133,7 @@ function playTone(freq = 440, duration = 0.08, type = "sine", volume = 0.04, sli
 }
 
 function playLoad() { playTone(520, 0.08, "triangle", 0.03); }
-function playRelease() { playTone(380, 0.14, "sawtooth", 0.035, 120); }
+function playRelease() { playTone(360, 0.14, "sawtooth", 0.035, 120); }
 function playGood() {
   playTone(760, 0.08, "square", 0.04);
   setTimeout(() => playTone(960, 0.08, "square", 0.035), 50);
@@ -213,7 +216,7 @@ async function startCamera() {
   }
 
   cameraStarted = true;
-  setStatus("STEP 1: Put your throwing hand in the blue box.");
+  setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
 
   if (!started) {
     started = true;
@@ -249,6 +252,8 @@ function resetSession() {
   currentPower = 0;
 
   pitchCount = 0;
+  armReady = false;
+  armReadyPulse = 0;
 
   formScores = { load: 0, release: 0, follow: 0, total: 0 };
   lastResult = {
@@ -263,7 +268,7 @@ function resetSession() {
   characterBall = null;
 
   playReset();
-  setStatus("STEP 1: Put your throwing hand in the blue box.");
+  setStatus(`Pitch 1/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
   drawGame();
 }
 
@@ -340,57 +345,67 @@ async function loop() {
       y: wristScreen.y,
       t: performance.now()
     });
-    if (wristHistory.length > 16) wristHistory.shift();
+    if (wristHistory.length > 18) wristHistory.shift();
 
     const wristInLoadBox = pointInRect(wristScreen.x, wristScreen.y, loadBox);
+
+    armReadyPulse += 0.08;
 
     if (phase === "LOAD") {
       if (!readyLockout) {
         if (wristInLoadBox) {
           readyPoseFrames++;
-          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Hold your load.`);
+
+          if (readyPoseFrames >= 18) {
+            armReady = true;
+            feedbackText = "ARM READY";
+            feedbackTimer = 999999;
+            setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · ARM READY — THROW FORWARD`);
+          } else {
+            armReady = false;
+            setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Hold in box...`);
+          }
         } else {
+          armReady = false;
           readyPoseFrames = 0;
           setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
         }
 
-        if (readyPoseFrames >= 4) {
-          phase = "THROW";
-          formScores.load = 100;
-          feedbackText = "GREAT LOAD";
-          feedbackTimer = 50;
-          playLoad();
-          spawnBurst(loadBox.x + loadBox.w / 2, loadBox.y + loadBox.h / 2, BX.blue, 70);
-          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Throw forward.`);
-          wristHistory = [];
+        if (!armReady) return;
+
+        if (wristHistory.length >= 6) {
+          const first = wristHistory[0];
+          const last = wristHistory[wristHistory.length - 1];
+
+          const rawForwardX = (last.x - first.x) * FORWARD_DIRECTION;
+          const upwardY = first.y - last.y;
+
+          const forwardX = Math.max(0, rawForwardX);
+          const power = forwardX + Math.max(0, upwardY) * 0.25;
+          currentPower = Math.min(320, power * 2.2);
+
+          if (forwardX > releaseThreshold) {
+            phase = "FOLLOW";
+
+            formScores.load = 100;
+            formScores.release = Math.min(100, Math.round(power * 1.35));
+
+            feedbackText =
+              power > 120 ? "SUPER HEATER" :
+              power > 90 ? "POWER THROW" :
+              power > 60 ? "FAST BALL" :
+              "SMOOTH THROW";
+
+            feedbackTimer = 60;
+
+            playRelease();
+            spawnBurst(wristScreen.x, wristScreen.y, BX.orange, power * 1.4);
+            spawnCharacterBall(wristScreen.x, wristScreen.y, power * 1.25);
+
+            setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · FOLLOW THROUGH`);
+            wristHistory = [];
+          }
         }
-      }
-      return;
-    }
-
-    if (phase === "THROW" && wristHistory.length >= 5) {
-      const first = wristHistory[0];
-      const last = wristHistory[wristHistory.length - 1];
-
-      const rawForwardX = (last.x - first.x) * FORWARD_DIRECTION;
-      const upwardY = first.y - last.y;
-
-      const forwardX = Math.max(0, rawForwardX);
-      const power = forwardX + Math.max(0, upwardY) * 0.18;
-      currentPower = Math.min(280, power * 2);
-
-      if (forwardX > 30 && power > 35) {
-        formScores.release = Math.min(100, Math.round(power * 1.5));
-        phase = "FOLLOW";
-        feedbackText = power > 85 ? "POWER THROW" : "STRONG RELEASE";
-        feedbackTimer = 50;
-        playRelease();
-        spawnBurst(wristScreen.x, wristScreen.y, BX.orange, power);
-        spawnCharacterBall(wristScreen.x, wristScreen.y, power);
-        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Follow through across your body.`);
-        wristHistory = [];
-      } else {
-        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Throw forward.`);
       }
       return;
     }
@@ -401,10 +416,10 @@ async function loop() {
       const travel = Math.abs(last.x - first.x) + Math.abs(last.y - first.y);
 
       if (travel > 14) {
-        formScores.follow = Math.min(100, 45 + Math.round(travel * 2));
+        formScores.follow = Math.min(100, 45 + Math.round(travel * 2.2));
         finalizeThrow();
       } else {
-        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Follow through across your body.`);
+        setStatus(`Pitch ${pitchCount}/${MAX_PITCHES} · FOLLOW THROUGH`);
       }
     }
   } catch (err) {
@@ -433,25 +448,25 @@ function finalizeThrow() {
     note = "Excellent mechanics!";
     feedbackText = "EXCELLENT FORM";
     burstColor = BX.yellow;
-    burstPower = currentPower * 1.35;
+    burstPower = currentPower * 1.5;
     playGreat();
   } else if (formScores.total >= 75) {
     note = "Strong throw. Nice mechanics.";
     feedbackText = "STRONG FORM";
     burstColor = BX.green;
-    burstPower = currentPower * 1.15;
+    burstPower = currentPower * 1.25;
     playGood();
   } else if (formScores.follow < 55) {
     note = "Good start. Try a bigger follow-through.";
     feedbackText = "FOLLOW THROUGH MORE";
     burstColor = BX.orange;
-    burstPower = currentPower * 0.95;
+    burstPower = currentPower * 1.05;
     playGood();
   } else {
     note = "Try loading deeper behind your shoulder.";
     feedbackText = "LOAD DEEPER";
     burstColor = BX.blue;
-    burstPower = currentPower * 0.9;
+    burstPower = currentPower * 0.95;
     playGood();
   }
 
@@ -467,7 +482,7 @@ function finalizeThrow() {
     phase = "DONE";
     throwCooldown = true;
     resultPauseTimer = 160;
-    setStatus(`Round complete. ${pitchCount} pitches done. Press Reset Game to play again.`);
+    setStatus(`Round complete. ${MAX_PITCHES} pitches done. Press Reset Game to play again.`);
     feedbackText = "ROUND COMPLETE";
     feedbackTimer = 120;
     return;
@@ -478,6 +493,8 @@ function finalizeThrow() {
   wristHistory = [];
   throwCooldown = true;
   resultPauseTimer = 75;
+  armReady = false;
+  readyPoseFrames = 0;
 
   setStatus(`${note} Reset for pitch ${pitchCount + 1}/${MAX_PITCHES}...`);
 
@@ -486,6 +503,8 @@ function finalizeThrow() {
     phase = "LOAD";
     readyPoseFrames = 0;
     formScores = { ...formScores, load: 0, release: 0, follow: 0 };
+    feedbackText = "READY";
+    feedbackTimer = 0;
     setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
   }, 1400);
 }
@@ -536,7 +555,7 @@ function updateGame() {
     if (characterBall.life <= 0) characterBall = null;
   }
 
-  if (feedbackTimer > 0) feedbackTimer--;
+  if (feedbackTimer > 0 && feedbackTimer < 999999) feedbackTimer--;
 }
 
 /* =========================
@@ -572,34 +591,48 @@ function spawnBurst(x, y, color, power = 40) {
 }
 
 function spawnBigImpact(color, power) {
-  const ringCount = 6 + Math.floor(power / 28);
   const cx = gameCanvas.width * 0.68;
   const cy = gameCanvas.height * 0.36;
+
+  const ringCount =
+    power > 220 ? 14 :
+    power > 160 ? 10 :
+    power > 100 ? 8 : 6;
+
+  const ringScale =
+    power > 220 ? 1.9 :
+    power > 160 ? 1.5 :
+    power > 100 ? 1.2 : 1;
 
   for (let i = 0; i < ringCount; i++) {
     rings.push({
       x: cx,
       y: cy,
-      r: 24 + i * 24,
-      grow: 6 + i * 0.8,
-      alpha: 0.82 - i * 0.065,
+      r: (24 + i * 24) * ringScale,
+      grow: (6 + i * 0.8) * ringScale,
+      alpha: 0.85 - i * 0.05,
       color
     });
   }
 
-  const accent = [BX.blue, BX.orange, BX.yellow, BX.green, BX.pink, BX.red];
-  for (let i = 0; i < 34; i++) {
+  for (let i = 0; i < ringCount * 6; i++) {
     confetti.push({
       x: cx,
       y: cy,
-      vx: Math.random() * 14 - 7,
-      vy: Math.random() * -10 - 1,
-      w: 7 + Math.random() * 10,
-      h: 5 + Math.random() * 7,
+      vx: Math.random() * 18 - 9,
+      vy: Math.random() * -14 - 2,
+      w: 8 + Math.random() * 14,
+      h: 5 + Math.random() * 10,
       rot: Math.random() * Math.PI,
-      spin: (Math.random() - 0.5) * 0.45,
+      spin: (Math.random() - 0.5) * 0.55,
       alpha: 1,
-      color: accent[Math.floor(Math.random() * accent.length)]
+      color: [
+        BX.blue,
+        BX.orange,
+        BX.yellow,
+        BX.green,
+        BX.pink
+      ][Math.floor(Math.random() * 5)]
     });
   }
 
@@ -611,11 +644,11 @@ function spawnBigImpact(color, power) {
       vy: Math.random() * 12 - 6,
       size: 7 + Math.random() * 12,
       alpha: 0.95,
-      color: accent[Math.floor(Math.random() * accent.length)]
+      color: [BX.blue, BX.orange, BX.yellow, BX.green, BX.pink][Math.floor(Math.random() * 5)]
     });
   }
 
-  addFlash(color, 0.26);
+  addFlash(color, 0.32);
 }
 
 function spawnCharacterBall(x, y, power) {
@@ -780,10 +813,9 @@ function drawHUD() {
 
   gameCtx.font = "bold 38px Arial";
   if (phase === "LOAD") gameCtx.fillStyle = BX.blue;
-  else if (phase === "THROW") gameCtx.fillStyle = BX.orange;
   else if (phase === "FOLLOW") gameCtx.fillStyle = BX.green;
   else if (phase === "DONE") gameCtx.fillStyle = BX.yellow;
-  else gameCtx.fillStyle = BX.yellow;
+  else gameCtx.fillStyle = BX.orange;
 
   gameCtx.fillText(phase, gameCanvas.width / 2, 94);
   gameCtx.textAlign = "start";
@@ -893,7 +925,6 @@ function drawCharacterBall() {
   gameCtx.translate(characterBall.x, characterBall.y);
   gameCtx.rotate(characterBall.rotation);
 
-  // glow
   const glow = gameCtx.createRadialGradient(0, 0, 4, 0, 0, characterBall.size * 1.8);
   glow.addColorStop(0, "rgba(255,255,255,0.25)");
   glow.addColorStop(1, "rgba(255,255,255,0)");
@@ -902,13 +933,11 @@ function drawCharacterBall() {
   gameCtx.arc(0, 0, characterBall.size * 1.8, 0, Math.PI * 2);
   gameCtx.fill();
 
-  // ball body
   gameCtx.fillStyle = "#ffffff";
   gameCtx.beginPath();
   gameCtx.arc(0, 0, characterBall.size, 0, Math.PI * 2);
   gameCtx.fill();
 
-  // seams
   gameCtx.strokeStyle = "#d94141";
   gameCtx.lineWidth = 2.5;
   gameCtx.beginPath();
@@ -918,14 +947,12 @@ function drawCharacterBall() {
   gameCtx.arc(0, 0, characterBall.size - 4, 3.6, 5.7);
   gameCtx.stroke();
 
-  // eyes
   gameCtx.fillStyle = BX.navy;
   gameCtx.beginPath();
   gameCtx.arc(-characterBall.size * 0.28, -characterBall.size * 0.1, 2.5, 0, Math.PI * 2);
   gameCtx.arc(characterBall.size * 0.12, -characterBall.size * 0.1, 2.5, 0, Math.PI * 2);
   gameCtx.fill();
 
-  // mouth
   gameCtx.strokeStyle = BX.navy;
   gameCtx.lineWidth = 2;
   gameCtx.beginPath();
@@ -980,17 +1007,38 @@ function drawFallbackOverlay() {
 function drawSilhouette(keypoints) {
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-  overlayCtx.fillStyle = "rgba(0,140,255,0.22)";
-  overlayCtx.strokeStyle = "rgba(0,220,255,1)";
-  overlayCtx.lineWidth = 5;
+  const boxColor = armReady ? "rgba(80,255,140,0.30)" : "rgba(0,140,255,0.22)";
+  const strokeColor = armReady ? "rgba(80,255,140,1)" : "rgba(0,220,255,1)";
+
+  overlayCtx.fillStyle = boxColor;
+  overlayCtx.strokeStyle = strokeColor;
+  overlayCtx.lineWidth = armReady ? 7 : 5;
 
   if (loadBox) {
     overlayCtx.fillRect(loadBox.x, loadBox.y, loadBox.w, loadBox.h);
     overlayCtx.strokeRect(loadBox.x, loadBox.y, loadBox.w, loadBox.h);
 
+    if (armReady) {
+      overlayCtx.beginPath();
+      overlayCtx.strokeStyle = "rgba(80,255,140,0.65)";
+      overlayCtx.lineWidth = 4;
+      overlayCtx.arc(
+        loadBox.x + loadBox.w / 2,
+        loadBox.y + loadBox.h / 2,
+        18 + Math.sin(armReadyPulse) * 10,
+        0,
+        Math.PI * 2
+      );
+      overlayCtx.stroke();
+    }
+
     overlayCtx.fillStyle = "rgba(255,255,255,0.95)";
     overlayCtx.font = "bold 20px Arial";
-    overlayCtx.fillText("LOAD BOX", loadBox.x, Math.max(24, loadBox.y - 10));
+    overlayCtx.fillText(
+      armReady ? "ARM READY" : "LOAD BOX",
+      loadBox.x,
+      Math.max(24, loadBox.y - 10)
+    );
   } else {
     overlayCtx.fillRect(40, 80, 120, 140);
     overlayCtx.strokeRect(40, 80, 120, 140);
@@ -1015,7 +1063,7 @@ function drawSilhouette(keypoints) {
 
   keypoints.forEach((k) => {
     if (k.score > 0.25) {
-      overlayCtx.fillStyle = "rgba(255,230,120,0.95)";
+      overlayCtx.fillStyle = armReady ? "rgba(80,255,140,1)" : "rgba(255,230,120,0.95)";
       overlayCtx.beginPath();
       overlayCtx.arc(k.x, k.y, 6, 0, Math.PI * 2);
       overlayCtx.fill();
@@ -1023,7 +1071,7 @@ function drawSilhouette(keypoints) {
   });
 
   if (wristScreen) {
-    overlayCtx.fillStyle = "rgba(255,255,255,1)";
+    overlayCtx.fillStyle = armReady ? "rgba(80,255,140,1)" : "rgba(255,255,255,1)";
     overlayCtx.beginPath();
     overlayCtx.arc(wristScreen.x, wristScreen.y, 12, 0, Math.PI * 2);
     overlayCtx.fill();
