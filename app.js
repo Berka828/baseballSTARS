@@ -140,55 +140,21 @@ function playReset() { playTone(520, 0.06, "triangle", 0.03); }
 startBtn.onclick = async () => {
   try {
     ensureAudio();
-    setStatus("Looking for cameras...");
+    setStatus("Starting camera...");
 
-    // Ask permission once so labels become visible
-    let tempStream = null;
-    try {
-      tempStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: false
-      });
-    } catch (permErr) {
-      console.error("Initial camera permission error:", permErr);
-      throw new Error("Camera permission was denied or no camera is available.");
-    }
-
-    // Stop temporary permission stream before reopening preferred device
-    tempStream.getTracks().forEach(track => track.stop());
-
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoDevices = devices.filter(d => d.kind === "videoinput");
-
-    console.log("Available video devices:", videoDevices);
-
-    if (!videoDevices.length) {
-      throw new Error("No video cameras were found.");
-    }
-
-    // Prefer Azure / Kinect if present
-    const preferredDevice =
-      videoDevices.find(d => /azure|kinect/i.test(d.label)) ||
-      videoDevices.find(d => /webcam|camera|usb/i.test(d.label)) ||
-      videoDevices[0];
-
-    console.log("Selected camera:", preferredDevice);
-
-    setStatus(`Starting camera: ${preferredDevice.label || "Selected camera"}...`);
-
-    // Clean up old stream if one already exists
+    // Stop previous stream only if already running
     if (video.srcObject) {
       const oldStream = video.srcObject;
       oldStream.getTracks().forEach(track => track.stop());
       video.srcObject = null;
     }
 
+    // SINGLE clean camera request
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
-        deviceId: preferredDevice.deviceId ? { exact: preferredDevice.deviceId } : undefined,
         width: { ideal: 640 },
         height: { ideal: 480 },
-        frameRate: { ideal: 30, max: 30 }
+        frameRate: { ideal: 30 }
       },
       audio: false
     });
@@ -197,8 +163,8 @@ startBtn.onclick = async () => {
 
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error("Timeout starting video source"));
-      }, 12000);
+        reject(new Error("Camera timeout"));
+      }, 10000);
 
       video.onloadedmetadata = () => {
         clearTimeout(timeout);
@@ -207,20 +173,14 @@ startBtn.onclick = async () => {
 
       video.onerror = () => {
         clearTimeout(timeout);
-        reject(new Error("Video element failed while loading camera metadata."));
+        reject(new Error("Video failed to load"));
       };
     });
 
     await video.play();
 
-    overlay.width = video.videoWidth || video.clientWidth || 640;
-    overlay.height = video.videoHeight || video.clientHeight || 480;
-
-    console.log("Video started:", {
-      width: video.videoWidth,
-      height: video.videoHeight,
-      label: preferredDevice.label
-    });
+    overlay.width = video.videoWidth || 640;
+    overlay.height = video.videoHeight || 480;
 
     setStatus("Loading pose detector...");
 
@@ -230,7 +190,10 @@ startBtn.onclick = async () => {
 
       detector = await poseDetection.createDetector(
         poseDetection.SupportedModels.MoveNet,
-        { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+        {
+          modelType:
+            poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
+        }
       );
     }
 
@@ -242,21 +205,11 @@ startBtn.onclick = async () => {
       started = true;
       requestAnimationFrame(loop);
     }
+
   } catch (err) {
-    console.error("Camera init error:", err);
-
-    let message = err.message || "Unknown camera error.";
-
-    if (/timeout/i.test(message)) {
-      message = "Timeout starting video source. Close any apps using the camera, then try again. Azure/Kinect cameras may not work reliably in the browser.";
-    } else if (/permission/i.test(message)) {
-      message = "Camera permission was denied. Allow camera access and try again.";
-    } else if (/NotReadableError/i.test(String(err))) {
-      message = "The camera is busy in another app. Close Zoom, Teams, OBS, Kinect Viewer, or Camera and try again.";
-    }
-
-    setStatus(`Error: ${message}`);
-    alert(`Error: ${message}`);
+    console.error("Camera error:", err);
+    setStatus("Camera failed. Check OBS Virtual Camera.");
+    alert("Camera failed: " + err.message);
   }
 };
 
