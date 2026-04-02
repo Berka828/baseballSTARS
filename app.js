@@ -20,7 +20,7 @@ let readyLockout = false;
 let throwCooldown = false;
 let resultPauseTimer = 0;
 
-let phase = "LOAD"; // LOAD / THROW / FOLLOW / RESET
+let phase = "LOAD"; // LOAD / THROW / FOLLOW / RESET / DONE
 let feedbackText = "READY";
 let feedbackTimer = 0;
 
@@ -40,10 +40,14 @@ let sessionCount = 0;
 let avgScore = 0;
 let currentPower = 0;
 
+let pitchCount = 0;
+const MAX_PITCHES = 6;
+
 let rings = [];
 let trailDots = [];
 let flashes = [];
 let confetti = [];
+let characterBall = null;
 
 const FORWARD_DIRECTION = 1;
 
@@ -53,7 +57,9 @@ const BX = {
   blue: "#6cc7ff",
   pink: "#d87adf",
   green: "#8ed857",
-  white: "#ffffff"
+  white: "#ffffff",
+  navy: "#07121f",
+  red: "#ff6b6b"
 };
 
 function setStatus(msg) {
@@ -124,7 +130,7 @@ function playTone(freq = 440, duration = 0.08, type = "sine", volume = 0.04, sli
 }
 
 function playLoad() { playTone(520, 0.08, "triangle", 0.03); }
-function playRelease() { playTone(380, 0.12, "sawtooth", 0.03, 140); }
+function playRelease() { playTone(380, 0.14, "sawtooth", 0.035, 120); }
 function playGood() {
   playTone(760, 0.08, "square", 0.04);
   setTimeout(() => playTone(960, 0.08, "square", 0.035), 50);
@@ -152,7 +158,6 @@ async function startCamera() {
 
   const devices = await navigator.mediaDevices.enumerateDevices();
   const videoDevices = devices.filter(d => d.kind === "videoinput");
-  console.log("Video devices:", videoDevices);
 
   const preferredDevice =
     videoDevices.find(d => /obs virtual camera/i.test(d.label)) ||
@@ -160,11 +165,7 @@ async function startCamera() {
     videoDevices.find(d => /camera|webcam|usb/i.test(d.label)) ||
     videoDevices[0];
 
-  if (!preferredDevice) {
-    throw new Error("No video input device found.");
-  }
-
-  console.log("Using device:", preferredDevice);
+  if (!preferredDevice) throw new Error("No video input device found.");
 
   const stream = await navigator.mediaDevices.getUserMedia({
     video: {
@@ -198,13 +199,6 @@ async function startCamera() {
   overlay.height = video.videoHeight || 480;
   overlay.style.width = "100%";
   overlay.style.height = "100%";
-
-  console.log("Video started:", {
-    width: video.videoWidth,
-    height: video.videoHeight
-  });
-
-  setStatus("Loading pose detector...");
 
   if (!detector) {
     await tf.setBackend("webgl");
@@ -254,6 +248,8 @@ function resetSession() {
   feedbackTimer = 0;
   currentPower = 0;
 
+  pitchCount = 0;
+
   formScores = { load: 0, release: 0, follow: 0, total: 0 };
   lastResult = {
     total: 0,
@@ -264,6 +260,7 @@ function resetSession() {
   trailDots = [];
   flashes = [];
   confetti = [];
+  characterBall = null;
 
   playReset();
   setStatus("STEP 1: Put your throwing hand in the blue box.");
@@ -335,6 +332,7 @@ async function loop() {
 
     drawSilhouette(keypoints);
 
+    if (phase === "DONE") return;
     if (throwCooldown || resultPauseTimer > 0) return;
 
     wristHistory.push({
@@ -350,10 +348,10 @@ async function loop() {
       if (!readyLockout) {
         if (wristInLoadBox) {
           readyPoseFrames++;
-          setStatus("STEP 1: Hold your load.");
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Hold your load.`);
         } else {
           readyPoseFrames = 0;
-          setStatus("STEP 1: Put your throwing hand in the blue box.");
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
         }
 
         if (readyPoseFrames >= 4) {
@@ -362,8 +360,8 @@ async function loop() {
           feedbackText = "GREAT LOAD";
           feedbackTimer = 50;
           playLoad();
-          spawnBurst(loadBox.x + loadBox.w / 2, loadBox.y + loadBox.h / 2, BX.blue, 50);
-          setStatus("STEP 2: Throw forward.");
+          spawnBurst(loadBox.x + loadBox.w / 2, loadBox.y + loadBox.h / 2, BX.blue, 70);
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Throw forward.`);
           wristHistory = [];
         }
       }
@@ -384,14 +382,15 @@ async function loop() {
       if (forwardX > 30 && power > 35) {
         formScores.release = Math.min(100, Math.round(power * 1.5));
         phase = "FOLLOW";
-        feedbackText = "STRONG RELEASE";
+        feedbackText = power > 85 ? "POWER THROW" : "STRONG RELEASE";
         feedbackTimer = 50;
         playRelease();
         spawnBurst(wristScreen.x, wristScreen.y, BX.orange, power);
-        setStatus("STEP 3: Follow through across your body.");
+        spawnCharacterBall(wristScreen.x, wristScreen.y, power);
+        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Follow through across your body.`);
         wristHistory = [];
       } else {
-        setStatus("STEP 2: Throw forward.");
+        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Throw forward.`);
       }
       return;
     }
@@ -405,7 +404,7 @@ async function loop() {
         formScores.follow = Math.min(100, 45 + Math.round(travel * 2));
         finalizeThrow();
       } else {
-        setStatus("STEP 3: Follow through across your body.");
+        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Follow through across your body.`);
       }
     }
   } catch (err) {
@@ -422,31 +421,37 @@ function finalizeThrow() {
     formScores.follow * 0.28
   );
 
+  pitchCount++;
   sessionCount++;
   avgScore = Math.round(((avgScore * (sessionCount - 1)) + formScores.total) / sessionCount);
 
   let note = "";
   let burstColor = BX.blue;
+  let burstPower = currentPower;
 
   if (formScores.total >= 90) {
     note = "Excellent mechanics!";
     feedbackText = "EXCELLENT FORM";
     burstColor = BX.yellow;
+    burstPower = currentPower * 1.35;
     playGreat();
   } else if (formScores.total >= 75) {
     note = "Strong throw. Nice mechanics.";
     feedbackText = "STRONG FORM";
     burstColor = BX.green;
+    burstPower = currentPower * 1.15;
     playGood();
   } else if (formScores.follow < 55) {
     note = "Good start. Try a bigger follow-through.";
     feedbackText = "FOLLOW THROUGH MORE";
     burstColor = BX.orange;
+    burstPower = currentPower * 0.95;
     playGood();
   } else {
     note = "Try loading deeper behind your shoulder.";
     feedbackText = "LOAD DEEPER";
     burstColor = BX.blue;
+    burstPower = currentPower * 0.9;
     playGood();
   }
 
@@ -456,23 +461,33 @@ function finalizeThrow() {
     note
   };
 
-  spawnBigImpact(burstColor, currentPower);
+  spawnBigImpact(burstColor, burstPower);
+
+  if (pitchCount >= MAX_PITCHES) {
+    phase = "DONE";
+    throwCooldown = true;
+    resultPauseTimer = 160;
+    setStatus(`Round complete. ${pitchCount} pitches done. Press Reset Game to play again.`);
+    feedbackText = "ROUND COMPLETE";
+    feedbackTimer = 120;
+    return;
+  }
 
   phase = "RESET";
   readyLockout = true;
   wristHistory = [];
   throwCooldown = true;
-  resultPauseTimer = 100;
+  resultPauseTimer = 75;
 
-  setStatus(note);
+  setStatus(`${note} Reset for pitch ${pitchCount + 1}/${MAX_PITCHES}...`);
 
   setTimeout(() => {
     throwCooldown = false;
     phase = "LOAD";
     readyPoseFrames = 0;
     formScores = { ...formScores, load: 0, release: 0, follow: 0 };
-    setStatus("STEP 1: Put your throwing hand in the blue box.");
-  }, 1800);
+    setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
+  }, 1400);
 }
 
 /* =========================
@@ -485,7 +500,7 @@ function updateGame() {
     const t = trailDots[i];
     t.x += t.vx;
     t.y += t.vy;
-    t.size *= 0.97;
+    t.size *= 0.965;
     t.alpha *= 0.94;
     if (t.size < 0.8 || t.alpha < 0.05) trailDots.splice(i, 1);
   }
@@ -493,7 +508,7 @@ function updateGame() {
   for (let i = rings.length - 1; i >= 0; i--) {
     const r = rings[i];
     r.r += r.grow;
-    r.alpha *= 0.93;
+    r.alpha *= 0.928;
     if (r.alpha < 0.05) rings.splice(i, 1);
   }
 
@@ -512,6 +527,15 @@ function updateGame() {
     if (c.alpha < 0.05 || c.y > gameCanvas.height + 30) confetti.splice(i, 1);
   }
 
+  if (characterBall) {
+    characterBall.life--;
+    characterBall.x += characterBall.vx;
+    characterBall.y += characterBall.vy;
+    characterBall.vy += 0.12;
+    characterBall.rotation += characterBall.spin;
+    if (characterBall.life <= 0) characterBall = null;
+  }
+
   if (feedbackTimer > 0) feedbackTimer--;
 }
 
@@ -519,65 +543,93 @@ function updateGame() {
    FX
 ========================= */
 function spawnBurst(x, y, color, power = 40) {
-  const ringCount = 2 + Math.floor(power / 28);
+  const ringCount = 3 + Math.floor(power / 22);
 
   for (let i = 0; i < ringCount; i++) {
     rings.push({
       x,
       y,
-      r: 10 + i * 12,
-      grow: 4 + i * 0.7,
-      alpha: 0.85 - i * 0.1,
+      r: 10 + i * 16,
+      grow: 4.5 + i * 0.9,
+      alpha: 0.9 - i * 0.08,
       color
     });
   }
 
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 10; i++) {
     trailDots.push({
       x,
       y,
-      vx: Math.random() * 4 - 2,
-      vy: Math.random() * 4 - 2,
-      size: 5 + Math.random() * 5,
-      alpha: 0.9,
-      color
+      vx: Math.random() * 8 - 4,
+      vy: Math.random() * 8 - 4,
+      size: 6 + Math.random() * 7,
+      alpha: 0.95,
+      color: i % 2 === 0 ? color : BX.yellow
     });
   }
 
-  addFlash(color, 0.12);
+  addFlash(color, 0.15);
 }
 
 function spawnBigImpact(color, power) {
-  const ringCount = 4 + Math.floor(power / 40);
+  const ringCount = 6 + Math.floor(power / 28);
+  const cx = gameCanvas.width * 0.68;
+  const cy = gameCanvas.height * 0.36;
 
   for (let i = 0; i < ringCount; i++) {
     rings.push({
-      x: gameCanvas.width * 0.68,
-      y: gameCanvas.height * 0.36,
-      r: 20 + i * 22,
-      grow: 6 + i,
-      alpha: 0.75 - i * 0.08,
+      x: cx,
+      y: cy,
+      r: 24 + i * 24,
+      grow: 6 + i * 0.8,
+      alpha: 0.82 - i * 0.065,
       color
     });
   }
 
-  const accent = [BX.blue, BX.orange, BX.yellow, BX.green, BX.pink];
-  for (let i = 0; i < 18; i++) {
+  const accent = [BX.blue, BX.orange, BX.yellow, BX.green, BX.pink, BX.red];
+  for (let i = 0; i < 34; i++) {
     confetti.push({
-      x: gameCanvas.width * 0.68,
-      y: gameCanvas.height * 0.36,
-      vx: Math.random() * 10 - 5,
-      vy: Math.random() * -7 - 1,
-      w: 6 + Math.random() * 8,
-      h: 4 + Math.random() * 6,
+      x: cx,
+      y: cy,
+      vx: Math.random() * 14 - 7,
+      vy: Math.random() * -10 - 1,
+      w: 7 + Math.random() * 10,
+      h: 5 + Math.random() * 7,
       rot: Math.random() * Math.PI,
-      spin: (Math.random() - 0.5) * 0.35,
+      spin: (Math.random() - 0.5) * 0.45,
       alpha: 1,
       color: accent[Math.floor(Math.random() * accent.length)]
     });
   }
 
-  addFlash(color, 0.22);
+  for (let i = 0; i < 18; i++) {
+    trailDots.push({
+      x: cx,
+      y: cy,
+      vx: Math.random() * 12 - 6,
+      vy: Math.random() * 12 - 6,
+      size: 7 + Math.random() * 12,
+      alpha: 0.95,
+      color: accent[Math.floor(Math.random() * accent.length)]
+    });
+  }
+
+  addFlash(color, 0.26);
+}
+
+function spawnCharacterBall(x, y, power) {
+  characterBall = {
+    x,
+    y,
+    vx: 4 + power * 0.04,
+    vy: -2.5 - power * 0.015,
+    life: 42,
+    rotation: 0,
+    spin: 0.08 + power * 0.0006,
+    size: 20 + Math.min(12, power * 0.05),
+    mood: power > 85 ? "fierce" : "happy"
+  };
 }
 
 function addFlash(color, alpha = 0.25) {
@@ -599,6 +651,7 @@ function drawGame() {
   drawLastResultPanel();
   drawRings();
   drawTrail();
+  drawCharacterBall();
   drawConfetti();
   drawCelebrationFlash();
 }
@@ -711,11 +764,12 @@ function drawHUD() {
   gameCtx.font = "bold 15px Arial";
   gameCtx.fillText("MOTION ENERGY", 38, 22);
 
-  roundedRect(gameCtx, 1040, 28, 250, 90, 22, "rgba(6,16,28,0.76)", "rgba(255,255,255,0.10)", 2);
+  roundedRect(gameCtx, 1040, 28, 250, 100, 22, "rgba(6,16,28,0.76)", "rgba(255,255,255,0.10)", 2);
   gameCtx.fillStyle = BX.white;
-  gameCtx.font = "bold 28px Arial";
-  gameCtx.fillText(`Throws: ${sessionCount}`, 1064, 62);
-  gameCtx.fillText(`Avg: ${avgScore}`, 1064, 96);
+  gameCtx.font = "bold 26px Arial";
+  gameCtx.fillText(`Pitch: ${pitchCount}/${MAX_PITCHES}`, 1064, 58);
+  gameCtx.fillText(`Throws: ${sessionCount}`, 1064, 88);
+  gameCtx.fillText(`Avg: ${avgScore}`, 1064, 118);
 
   roundedRect(gameCtx, 430, 26, 500, 86, 24, "rgba(6,16,28,0.60)", "rgba(255,255,255,0.06)", 1);
 
@@ -728,6 +782,7 @@ function drawHUD() {
   if (phase === "LOAD") gameCtx.fillStyle = BX.blue;
   else if (phase === "THROW") gameCtx.fillStyle = BX.orange;
   else if (phase === "FOLLOW") gameCtx.fillStyle = BX.green;
+  else if (phase === "DONE") gameCtx.fillStyle = BX.yellow;
   else gameCtx.fillStyle = BX.yellow;
 
   gameCtx.fillText(phase, gameCanvas.width / 2, 94);
@@ -758,9 +813,8 @@ function drawMiniMap() {
 function drawFormPanel() {
   const panelX = 360;
   const panelY = 650;
-  const panelW = 400;
 
-  roundedRect(gameCtx, panelX, panelY, panelW, 120, 22, "rgba(6,16,28,0.72)", "rgba(255,255,255,0.10)", 2);
+  roundedRect(gameCtx, panelX, panelY, 400, 120, 22, "rgba(6,16,28,0.72)", "rgba(255,255,255,0.10)", 2);
 
   gameCtx.fillStyle = BX.white;
   gameCtx.font = "bold 18px Arial";
@@ -816,7 +870,7 @@ function drawLastResultPanel() {
 function drawRings() {
   rings.forEach((r) => {
     gameCtx.strokeStyle = hexToRgba(r.color || "#ffffff", r.alpha);
-    gameCtx.lineWidth = 5;
+    gameCtx.lineWidth = 5 + Math.max(0, r.grow * 0.12);
     gameCtx.beginPath();
     gameCtx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
     gameCtx.stroke();
@@ -830,6 +884,60 @@ function drawTrail() {
     gameCtx.arc(t.x, t.y, t.size, 0, Math.PI * 2);
     gameCtx.fill();
   });
+}
+
+function drawCharacterBall() {
+  if (!characterBall) return;
+
+  gameCtx.save();
+  gameCtx.translate(characterBall.x, characterBall.y);
+  gameCtx.rotate(characterBall.rotation);
+
+  // glow
+  const glow = gameCtx.createRadialGradient(0, 0, 4, 0, 0, characterBall.size * 1.8);
+  glow.addColorStop(0, "rgba(255,255,255,0.25)");
+  glow.addColorStop(1, "rgba(255,255,255,0)");
+  gameCtx.fillStyle = glow;
+  gameCtx.beginPath();
+  gameCtx.arc(0, 0, characterBall.size * 1.8, 0, Math.PI * 2);
+  gameCtx.fill();
+
+  // ball body
+  gameCtx.fillStyle = "#ffffff";
+  gameCtx.beginPath();
+  gameCtx.arc(0, 0, characterBall.size, 0, Math.PI * 2);
+  gameCtx.fill();
+
+  // seams
+  gameCtx.strokeStyle = "#d94141";
+  gameCtx.lineWidth = 2.5;
+  gameCtx.beginPath();
+  gameCtx.arc(0, 0, characterBall.size - 4, 0.45, 2.55);
+  gameCtx.stroke();
+  gameCtx.beginPath();
+  gameCtx.arc(0, 0, characterBall.size - 4, 3.6, 5.7);
+  gameCtx.stroke();
+
+  // eyes
+  gameCtx.fillStyle = BX.navy;
+  gameCtx.beginPath();
+  gameCtx.arc(-characterBall.size * 0.28, -characterBall.size * 0.1, 2.5, 0, Math.PI * 2);
+  gameCtx.arc(characterBall.size * 0.12, -characterBall.size * 0.1, 2.5, 0, Math.PI * 2);
+  gameCtx.fill();
+
+  // mouth
+  gameCtx.strokeStyle = BX.navy;
+  gameCtx.lineWidth = 2;
+  gameCtx.beginPath();
+  if (characterBall.mood === "fierce") {
+    gameCtx.moveTo(-characterBall.size * 0.18, characterBall.size * 0.18);
+    gameCtx.lineTo(characterBall.size * 0.16, characterBall.size * 0.12);
+  } else {
+    gameCtx.arc(-1, characterBall.size * 0.1, characterBall.size * 0.18, 0.15, 2.8);
+  }
+  gameCtx.stroke();
+
+  gameCtx.restore();
 }
 
 function drawConfetti() {
@@ -924,7 +1032,7 @@ function drawSilhouette(keypoints) {
 
 function drawBone(keypoints, aName, bName) {
   const a = findKeypoint(keypoints, aName);
-  const b = findKeypoint(keypoints, aName === bName ? aName : bName);
+  const b = findKeypoint(keypoints, bName);
   if (!a || !b || a.score < 0.25 || b.score < 0.25) return;
 
   overlayCtx.beginPath();
