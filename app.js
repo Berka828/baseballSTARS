@@ -17,6 +17,7 @@ let wristScreen = null;
 let shoulderScreenGlobal = null;
 let loadBox = null;
 let readyBox = null;
+let bullseye = null;
 let followGuide = null;
 
 let wristHistory = [];
@@ -32,13 +33,15 @@ let feedbackTimer = 0;
 let formScores = {
   load: 0,
   release: 0,
+  target: 0,
   follow: 0,
   total: 0
 };
 
 let lastResult = {
   total: 0,
-  note: "Complete a throw to get coaching feedback."
+  note: "Complete a throw to get coaching feedback.",
+  targetNote: "No throw yet"
 };
 
 let sessionCount = 0;
@@ -58,10 +61,16 @@ let characterBall = null;
 let armReady = false;
 let armReadyPulse = 0;
 let boxState = "blue"; // blue / green / red / orange
+let targetState = "idle"; // idle / hit / near / miss
+
+let releasePoint = null;
+let targetHitLevel = "none"; // perfect / good / near / miss
+let targetDistance = 9999;
+
 const FORWARD_DIRECTION = 1;
-const releaseThreshold = 48; // more forgiving
-const HOLD_FRAMES_REQUIRED = 12; // more forgiving
-const FOLLOW_TRAVEL_REQUIRED = 10; // more forgiving
+const releaseThreshold = 48;
+const HOLD_FRAMES_REQUIRED = 12;
+const FOLLOW_TRAVEL_REQUIRED = 10;
 
 const BX = {
   yellow: "#f1c94c",
@@ -206,6 +215,17 @@ function playGreat() {
   setTimeout(() => playTone(1120, 0.12, "triangle", 0.045), 110);
 }
 function playReset() { playTone(520, 0.06, "triangle", 0.03); }
+function playTargetHit() {
+  playTone(900, 0.07, "square", 0.045);
+  setTimeout(() => playTone(1180, 0.10, "square", 0.04), 45);
+}
+function playNearHit() {
+  playTone(700, 0.06, "triangle", 0.035);
+  setTimeout(() => playTone(860, 0.08, "triangle", 0.03), 35);
+}
+function playMiss() {
+  playTone(210, 0.10, "sawtooth", 0.03, 140);
+}
 
 /* =========================
    CAMERA START
@@ -271,7 +291,7 @@ async function startCamera() {
   }
 
   cameraStarted = true;
-  setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your hand in the blue box.`);
+  setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Load in blue box, then hit the target.`);
 
   if (!started) {
     started = true;
@@ -310,11 +330,17 @@ function resetSession() {
   armReady = false;
   armReadyPulse = 0;
   boxState = "blue";
+  targetState = "idle";
 
-  formScores = { load: 0, release: 0, follow: 0, total: 0 };
+  releasePoint = null;
+  targetHitLevel = "none";
+  targetDistance = 9999;
+
+  formScores = { load: 0, release: 0, target: 0, follow: 0, total: 0 };
   lastResult = {
     total: 0,
-    note: "Complete a throw to get coaching feedback."
+    note: "Complete a throw to get coaching feedback.",
+    targetNote: "No throw yet"
   };
 
   rings = [];
@@ -325,7 +351,7 @@ function resetSession() {
   characterBall = null;
 
   playReset();
-  setStatus(`Pitch 1/${MAX_PITCHES} · Put your hand in the blue box.`);
+  setStatus(`Pitch 1/${MAX_PITCHES} · Load in blue box, then hit the target.`);
   drawGame();
 }
 
@@ -382,7 +408,6 @@ async function loop() {
     const torsoHeight = Math.abs(hipScreen.y - shoulderScreenGlobal.y);
     const shoulderSpan = Math.abs(shoulderScreenGlobal.x - leftShoulderScreen.x);
 
-    // More forgiving, larger zones
     const boxW = Math.max(shoulderSpan * 1.15, 145);
     const boxH = Math.max(torsoHeight * 0.95, 165);
 
@@ -400,11 +425,19 @@ async function loop() {
       h: loadBox.h - 24
     };
 
+    bullseye = {
+      x: shoulderScreenGlobal.x + Math.max(70, shoulderSpan * 0.55),
+      y: shoulderScreenGlobal.y + 8,
+      outerR: 48,
+      middleR: 28,
+      innerR: 12
+    };
+
     followGuide = {
-      x1: shoulderScreenGlobal.x + 10,
-      y1: shoulderScreenGlobal.y + 18,
-      x2: shoulderScreenGlobal.x + 110,
-      y2: shoulderScreenGlobal.y + 95
+      x1: bullseye.x + 18,
+      y1: bullseye.y + 10,
+      x2: bullseye.x + 115,
+      y2: bullseye.y + 92
     };
 
     const wristInLoadBox = pointInRect(wristScreen.x, wristScreen.y, loadBox);
@@ -433,7 +466,7 @@ async function loop() {
     } else if (phase === "ARMED") {
       boxState = wristInLoadBox ? "green" : "red";
     } else if (phase === "FOLLOW") {
-      boxState = wristInLoadBox ? "green" : "orange";
+      boxState = "orange";
     } else {
       boxState = "blue";
     }
@@ -462,7 +495,7 @@ async function loop() {
           feedbackTimer = 999999;
           playLoad();
           spawnBurst(readyBox.x + readyBox.w / 2, readyBox.y + readyBox.h / 2, BX.green, 60);
-          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Great load. Throw forward!`);
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Great load. Throw to the target!`);
           wristHistory = [];
         } else {
           armReady = false;
@@ -489,26 +522,50 @@ async function loop() {
         currentPower = Math.min(360, power * 2.35);
 
         if (forwardX > releaseThreshold) {
-          phase = "FOLLOW";
+          releasePoint = { x: wristScreen.x, y: wristScreen.y };
+          targetDistance = Math.hypot(releasePoint.x - bullseye.x, releasePoint.y - bullseye.y);
+
+          if (targetDistance <= bullseye.innerR) {
+            targetHitLevel = "perfect";
+            targetState = "hit";
+            formScores.target = 100;
+            feedbackText = "BULLSEYE!";
+            playTargetHit();
+            spawnBurst(bullseye.x, bullseye.y, BX.yellow, power * 1.7);
+            spawnStarBurst(bullseye.x, bullseye.y, power * 1.4);
+          } else if (targetDistance <= bullseye.middleR) {
+            targetHitLevel = "good";
+            targetState = "hit";
+            formScores.target = 85;
+            feedbackText = "TARGET HIT";
+            playTargetHit();
+            spawnBurst(bullseye.x, bullseye.y, BX.green, power * 1.45);
+          } else if (targetDistance <= bullseye.outerR + 22) {
+            targetHitLevel = "near";
+            targetState = "near";
+            formScores.target = 60;
+            feedbackText = "SO CLOSE";
+            playNearHit();
+            spawnBurst(bullseye.x, bullseye.y, BX.orange, power * 1.1);
+          } else {
+            targetHitLevel = "miss";
+            targetState = "miss";
+            formScores.target = 25;
+            feedbackText = "MISS THE TARGET";
+            playMiss();
+            spawnBurst(releasePoint.x, releasePoint.y, BX.red, power * 0.9);
+          }
+
           formScores.release = Math.min(100, Math.round(power * 1.45));
-
-          feedbackText =
-            power > 135 ? "SUPER HEATER" :
-            power > 105 ? "POWER THROW" :
-            power > 72 ? "FAST BALL" :
-            "SMOOTH THROW";
-
           feedbackTimer = 60;
+          phase = "FOLLOW";
 
-          playRelease();
-          spawnBurst(wristScreen.x, wristScreen.y, BX.orange, power * 1.55);
           spawnCharacterBall(wristScreen.x, wristScreen.y, power * 1.3);
-          spawnStarBurst(wristScreen.x, wristScreen.y, power);
 
-          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Follow through to the orange path!`);
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Follow through down the orange path.`);
           wristHistory = [];
         } else {
-          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Throw forward.`);
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Throw to the target.`);
         }
       }
       return;
@@ -535,9 +592,10 @@ async function loop() {
 
 function finalizeThrow() {
   formScores.total = Math.round(
-    formScores.load * 0.34 +
-    formScores.release * 0.38 +
-    formScores.follow * 0.28
+    formScores.load * 0.24 +
+    formScores.release * 0.26 +
+    formScores.target * 0.28 +
+    formScores.follow * 0.22
   );
 
   pitchCount++;
@@ -545,39 +603,57 @@ function finalizeThrow() {
   avgScore = Math.round(((avgScore * (sessionCount - 1)) + formScores.total) / sessionCount);
 
   let note = "";
+  let targetNote = "";
   let burstColor = BX.blue;
   let burstPower = currentPower;
 
-  if (formScores.total >= 90) {
-    note = "Excellent mechanics!";
-    feedbackText = "EXCELLENT FORM";
+  if (targetHitLevel === "perfect") {
+    targetNote = "Bullseye hit!";
+  } else if (targetHitLevel === "good") {
+    targetNote = "Nice target hit.";
+  } else if (targetHitLevel === "near") {
+    targetNote = "Close to the target.";
+  } else {
+    targetNote = "Missed the target.";
+  }
+
+  if (formScores.total >= 92) {
+    note = "Excellent mechanics and aim!";
+    feedbackText = "STAR THROW";
     burstColor = BX.yellow;
-    burstPower = currentPower * 1.8;
+    burstPower = currentPower * 1.9;
     playGreat();
-  } else if (formScores.total >= 75) {
+  } else if (formScores.total >= 78) {
     note = "Strong throw. Nice mechanics.";
     feedbackText = "STRONG FORM";
     burstColor = BX.green;
-    burstPower = currentPower * 1.45;
+    burstPower = currentPower * 1.5;
     playGood();
-  } else if (formScores.follow < 55) {
-    note = "Good start. Try a bigger follow-through.";
-    feedbackText = "FOLLOW THROUGH MORE";
+  } else if (formScores.target < 60) {
+    note = "Good load. Aim more at the target.";
+    feedbackText = "AIM FOR TARGET";
     burstColor = BX.orange;
-    burstPower = currentPower * 1.15;
+    burstPower = currentPower * 1.2;
+    playGood();
+  } else if (formScores.follow < 58) {
+    note = "Nice start. Finish down the orange path.";
+    feedbackText = "MORE FOLLOW-THROUGH";
+    burstColor = BX.aqua;
+    burstPower = currentPower * 1.18;
     playGood();
   } else {
-    note = "Nice start. Load deeper and drive through.";
+    note = "Good start. Keep practicing.";
     feedbackText = "KEEP GOING";
     burstColor = BX.blue;
-    burstPower = currentPower * 1.05;
+    burstPower = currentPower * 1.08;
     playGood();
   }
 
   feedbackTimer = 90;
   lastResult = {
     total: formScores.total,
-    note
+    note,
+    targetNote
   };
 
   spawnBigImpact(burstColor, burstPower);
@@ -588,6 +664,7 @@ function finalizeThrow() {
     resultPauseTimer = 160;
     armReady = false;
     boxState = "blue";
+    targetState = "idle";
     setStatus(`Round complete. ${MAX_PITCHES} pitches done. Press Reset Game to play again.`);
     feedbackText = "ROUND COMPLETE";
     feedbackTimer = 120;
@@ -602,6 +679,10 @@ function finalizeThrow() {
   armReady = false;
   readyPoseFrames = 0;
   boxState = "blue";
+  targetState = "idle";
+  releasePoint = null;
+  targetHitLevel = "none";
+  targetDistance = 9999;
 
   setStatus(`${note} Reset for pitch ${pitchCount + 1}/${MAX_PITCHES}...`);
 
@@ -611,7 +692,8 @@ function finalizeThrow() {
     readyPoseFrames = 0;
     armReady = false;
     boxState = "blue";
-    formScores = { ...formScores, load: 0, release: 0, follow: 0 };
+    targetState = "idle";
+    formScores = { ...formScores, load: 0, release: 0, target: 0, follow: 0 };
     if (pitchCount < MAX_PITCHES) {
       feedbackText = "READY";
       feedbackTimer = 0;
@@ -973,19 +1055,20 @@ function drawMiniMap() {
 }
 
 function drawFormPanel() {
-  const panelX = 360;
+  const panelX = 330;
   const panelY = 650;
 
-  roundedRect(gameCtx, panelX, panelY, 400, 120, 22, "rgba(6,16,28,0.72)", "rgba(255,255,255,0.10)", 2);
+  roundedRect(gameCtx, panelX, panelY, 480, 120, 22, "rgba(6,16,28,0.72)", "rgba(255,255,255,0.10)", 2);
 
   gameCtx.fillStyle = BX.white;
   gameCtx.font = "bold 18px Arial";
   gameCtx.fillText("FORM SCORE", panelX + 18, panelY + 24);
 
-  drawBar(panelX + 18, panelY + 42, 140, 20, "LOAD", formScores.load, BX.blue);
-  drawBar(panelX + 18, panelY + 74, 140, 20, "RELEASE", formScores.release, BX.orange);
-  drawBar(panelX + 210, panelY + 42, 140, 20, "FOLLOW", formScores.follow, BX.green);
-  drawBar(panelX + 210, panelY + 74, 140, 20, "TOTAL", formScores.total, BX.yellow);
+  drawBar(panelX + 18, panelY + 42, 120, 20, "LOAD", formScores.load, BX.blue);
+  drawBar(panelX + 18, panelY + 74, 120, 20, "RELEASE", formScores.release, BX.orange);
+  drawBar(panelX + 180, panelY + 42, 120, 20, "TARGET", formScores.target, BX.yellow);
+  drawBar(panelX + 180, panelY + 74, 120, 20, "FOLLOW", formScores.follow, BX.green);
+  drawBar(panelX + 340, panelY + 58, 120, 20, "TOTAL", formScores.total, BX.pink);
 }
 
 function drawBar(x, y, w, h, label, value, color) {
@@ -1014,19 +1097,23 @@ function drawFeedbackBanner() {
 }
 
 function drawLastResultPanel() {
-  roundedRect(gameCtx, 970, 560, 320, 160, 22, "rgba(6,16,28,0.76)", "rgba(255,255,255,0.10)", 2);
+  roundedRect(gameCtx, 955, 540, 335, 180, 22, "rgba(6,16,28,0.76)", "rgba(255,255,255,0.10)", 2);
 
   gameCtx.fillStyle = BX.white;
   gameCtx.font = "bold 22px Arial";
-  gameCtx.fillText("COACH NOTE", 992, 592);
+  gameCtx.fillText("COACH NOTE", 978, 572);
 
   gameCtx.fillStyle = BX.yellow;
   gameCtx.font = "bold 18px Arial";
-  gameCtx.fillText(`Last Score: ${lastResult.total || 0}`, 992, 624);
+  gameCtx.fillText(`Last Score: ${lastResult.total || 0}`, 978, 603);
+
+  gameCtx.fillStyle = BX.aqua;
+  gameCtx.font = "bold 16px Arial";
+  gameCtx.fillText(lastResult.targetNote || "No throw yet", 978, 630);
 
   gameCtx.fillStyle = BX.white;
   gameCtx.font = "bold 16px Arial";
-  wrapText(lastResult.note || "Complete a throw to get coaching feedback.", 992, 655, 270, 22);
+  wrapText(lastResult.note || "Complete a throw to get coaching feedback.", 978, 660, 285, 22);
 }
 
 function drawRings() {
@@ -1158,33 +1245,39 @@ function drawFallbackOverlay() {
 function drawSilhouette(keypoints) {
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-  // Outer load box
   if (loadBox) {
     overlayCtx.fillStyle = "rgba(0,140,255,0.14)";
     overlayCtx.strokeStyle = "rgba(0,220,255,0.9)";
     overlayCtx.lineWidth = 4;
     overlayCtx.fillRect(loadBox.x, loadBox.y, loadBox.w, loadBox.h);
     overlayCtx.strokeRect(loadBox.x, loadBox.y, loadBox.w, loadBox.h);
+
+    overlayCtx.fillStyle = "rgba(255,255,255,0.96)";
+    overlayCtx.font = "bold 20px Arial";
+    overlayCtx.fillText("LOAD ZONE", loadBox.x, Math.max(24, loadBox.y - 10));
   }
 
-  // Inner ready box
   if (readyBox) {
-    let fillColor = "rgba(80,255,140,0.16)";
-    let strokeColor = "rgba(80,255,140,0.95)";
+    let fillColor = "rgba(80,255,140,0.14)";
+    let strokeColor = "rgba(80,255,140,0.8)";
     let label = "READY ZONE";
 
-    if (boxState === "red") {
+    if (boxState === "green") {
+      fillColor = "rgba(80,255,140,0.28)";
+      strokeColor = "rgba(80,255,140,1)";
+      label = "ARM READY";
+    } else if (boxState === "red") {
       fillColor = "rgba(255,90,90,0.18)";
-      strokeColor = "rgba(255,90,90,0.95)";
+      strokeColor = "rgba(255,90,90,1)";
       label = "GET BACK IN";
     } else if (boxState === "orange") {
       fillColor = "rgba(242,154,69,0.18)";
-      strokeColor = "rgba(242,154,69,0.95)";
+      strokeColor = "rgba(242,154,69,1)";
       label = "FOLLOW THROUGH";
     }
 
-    overlayCtx.fillStyle = boxState === "blue" ? "rgba(80,255,140,0.08)" : fillColor;
-    overlayCtx.strokeStyle = boxState === "blue" ? "rgba(80,255,140,0.55)" : strokeColor;
+    overlayCtx.fillStyle = fillColor;
+    overlayCtx.strokeStyle = strokeColor;
     overlayCtx.lineWidth = boxState === "green" ? 7 : 5;
     overlayCtx.fillRect(readyBox.x, readyBox.y, readyBox.w, readyBox.h);
     overlayCtx.strokeRect(readyBox.x, readyBox.y, readyBox.w, readyBox.h);
@@ -1201,17 +1294,53 @@ function drawSilhouette(keypoints) {
         Math.PI * 2
       );
       overlayCtx.stroke();
-      label = "ARM READY";
     }
-
-    overlayCtx.fillStyle = "rgba(255,255,255,0.96)";
-    overlayCtx.font = "bold 20px Arial";
-    overlayCtx.fillText(label, readyBox.x, Math.max(24, readyBox.y - 10));
   }
 
-  // Follow guide
-  if (followGuide && (phase === "ARMED" || phase === "FOLLOW")) {
-    overlayCtx.strokeStyle = phase === "FOLLOW" ? "rgba(242,154,69,0.95)" : "rgba(242,154,69,0.4)";
+  if (bullseye) {
+    const outerColor =
+      targetState === "hit" ? "rgba(241,201,76,0.9)" :
+      targetState === "near" ? "rgba(242,154,69,0.85)" :
+      targetState === "miss" ? "rgba(255,107,107,0.8)" :
+      "rgba(255,255,255,0.55)";
+
+    overlayCtx.strokeStyle = outerColor;
+    overlayCtx.lineWidth = 4;
+
+    overlayCtx.beginPath();
+    overlayCtx.arc(bullseye.x, bullseye.y, bullseye.outerR, 0, Math.PI * 2);
+    overlayCtx.stroke();
+
+    overlayCtx.beginPath();
+    overlayCtx.arc(bullseye.x, bullseye.y, bullseye.middleR, 0, Math.PI * 2);
+    overlayCtx.stroke();
+
+    overlayCtx.beginPath();
+    overlayCtx.arc(bullseye.x, bullseye.y, bullseye.innerR, 0, Math.PI * 2);
+    overlayCtx.stroke();
+
+    overlayCtx.fillStyle = "rgba(255,255,255,0.96)";
+    overlayCtx.font = "bold 18px Arial";
+    overlayCtx.fillText("TARGET", bullseye.x - 34, bullseye.y - bullseye.outerR - 10);
+
+    if (targetState === "hit") {
+      overlayCtx.beginPath();
+      overlayCtx.strokeStyle = "rgba(241,201,76,0.7)";
+      overlayCtx.lineWidth = 4;
+      overlayCtx.arc(
+        bullseye.x,
+        bullseye.y,
+        bullseye.outerR + Math.sin(armReadyPulse * 1.2) * 7,
+        0,
+        Math.PI * 2
+      );
+      overlayCtx.stroke();
+    }
+  }
+
+  if (followGuide) {
+    overlayCtx.strokeStyle =
+      phase === "FOLLOW" ? "rgba(242,154,69,0.95)" : "rgba(242,154,69,0.45)";
     overlayCtx.lineWidth = 6;
     overlayCtx.beginPath();
     overlayCtx.moveTo(followGuide.x1, followGuide.y1);
@@ -1221,6 +1350,10 @@ function drawSilhouette(keypoints) {
     overlayCtx.beginPath();
     overlayCtx.arc(followGuide.x2, followGuide.y2, 14, 0, Math.PI * 2);
     overlayCtx.stroke();
+
+    overlayCtx.fillStyle = "rgba(255,255,255,0.92)";
+    overlayCtx.font = "bold 16px Arial";
+    overlayCtx.fillText("FINISH", followGuide.x2 - 26, followGuide.y2 + 34);
   }
 
   overlayCtx.strokeStyle =
