@@ -6,10 +6,12 @@ const gameCtx = gameCanvas.getContext("2d");
 const startBtn = document.getElementById("startBtn");
 const resetBtn = document.getElementById("resetBtn");
 const statusText = document.getElementById("status");
+const cameraSelect = document.getElementById("cameraSelect");
 
 let detector = null;
 let started = false;
 let cameraStarted = false;
+let selectedCameraId = "";
 
 let wristScreen = null;
 let loadBox = null;
@@ -68,6 +70,60 @@ const BX = {
 
 function setStatus(msg) {
   if (statusText) statusText.textContent = msg;
+}
+
+/* =========================
+   CAMERA PICKER
+========================= */
+async function populateCameraSelect() {
+  if (!cameraSelect) return;
+
+  try {
+    // Ask permission once so labels populate
+    const tempStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: false
+    });
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(d => d.kind === "videoinput");
+
+    cameraSelect.innerHTML = "";
+
+    if (!videoDevices.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "No cameras found";
+      cameraSelect.appendChild(opt);
+      return;
+    }
+
+    videoDevices.forEach((device, index) => {
+      const option = document.createElement("option");
+      option.value = device.deviceId;
+      option.textContent = device.label || `Camera ${index + 1}`;
+      cameraSelect.appendChild(option);
+    });
+
+    // Prefer OBS or Kinect if found, otherwise first item
+    const preferred =
+      videoDevices.find(d => /obs virtual camera/i.test(d.label)) ||
+      videoDevices.find(d => /azure|kinect/i.test(d.label)) ||
+      videoDevices[0];
+
+    selectedCameraId = preferred.deviceId;
+    cameraSelect.value = selectedCameraId;
+
+    cameraSelect.onchange = () => {
+      selectedCameraId = cameraSelect.value;
+      console.log("Selected camera changed:", selectedCameraId);
+    };
+
+    tempStream.getTracks().forEach(track => track.stop());
+  } catch (err) {
+    console.error("Could not populate camera list:", err);
+    setStatus("Camera permission needed to list available cameras.");
+  }
 }
 
 /* =========================
@@ -160,20 +216,13 @@ async function startCamera() {
     video.srcObject = null;
   }
 
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  const videoDevices = devices.filter(d => d.kind === "videoinput");
-
-  const preferredDevice =
-    videoDevices.find(d => /obs virtual camera/i.test(d.label)) ||
-    videoDevices.find(d => /azure|kinect/i.test(d.label)) ||
-    videoDevices.find(d => /camera|webcam|usb/i.test(d.label)) ||
-    videoDevices[0];
-
-  if (!preferredDevice) throw new Error("No video input device found.");
+  if (!selectedCameraId && cameraSelect && cameraSelect.value) {
+    selectedCameraId = cameraSelect.value;
+  }
 
   const stream = await navigator.mediaDevices.getUserMedia({
     video: {
-      deviceId: preferredDevice.deviceId ? { exact: preferredDevice.deviceId } : undefined,
+      deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
       width: { ideal: 640 },
       height: { ideal: 480 },
       frameRate: { ideal: 30 }
@@ -339,10 +388,8 @@ async function loop() {
 
     const wristInLoadBox = pointInRect(wristScreen.x, wristScreen.y, loadBox);
 
-    // Lockout handling: after each pitch, user must leave box once before next load
     if (phase === "LOAD" && readyLockout) {
       boxState = wristInLoadBox ? "red" : "blue";
-
       drawSilhouette(keypoints);
 
       if (!wristInLoadBox) {
@@ -359,9 +406,8 @@ async function loop() {
 
     armReadyPulse += 0.08;
 
-    // phase colors
     if (phase === "LOAD") {
-      boxState = wristInLoadBox ? "blue" : "blue";
+      boxState = "blue";
     } else if (phase === "ARMED") {
       boxState = wristInLoadBox ? "green" : "red";
     } else if (phase === "FOLLOW") {
@@ -444,7 +490,6 @@ async function loop() {
           wristHistory = [];
         }
       }
-
       return;
     }
 
@@ -1103,9 +1148,11 @@ function drawSilhouette(keypoints) {
     overlayCtx.fillText("TEST BOX", 40, 68);
   }
 
-  overlayCtx.strokeStyle = boxState === "green"
-    ? "rgba(80,255,140,0.98)"
-    : "rgba(111,214,255,0.98)";
+  overlayCtx.strokeStyle =
+    boxState === "green" ? "rgba(80,255,140,0.98)" :
+    boxState === "red" ? "rgba(255,90,90,0.98)" :
+    boxState === "orange" ? "rgba(242,154,69,0.98)" :
+    "rgba(111,214,255,0.98)";
 
   overlayCtx.lineWidth = 6;
   overlayCtx.lineCap = "round";
@@ -1220,3 +1267,9 @@ function wrapText(text, x, y, maxWidth, lineHeight) {
   }
   gameCtx.fillText(line, x, y);
 }
+
+/* =========================
+   INIT
+========================= */
+forceOverlayVisibility();
+populateCameraSelect();
