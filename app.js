@@ -14,7 +14,10 @@ let cameraStarted = false;
 let selectedCameraId = "";
 
 let wristScreen = null;
+let shoulderScreenGlobal = null;
 let loadBox = null;
+let readyBox = null;
+let followGuide = null;
 
 let wristHistory = [];
 let readyPoseFrames = 0;
@@ -49,13 +52,16 @@ let rings = [];
 let trailDots = [];
 let flashes = [];
 let confetti = [];
+let starBursts = [];
 let characterBall = null;
 
 let armReady = false;
 let armReadyPulse = 0;
 let boxState = "blue"; // blue / green / red / orange
 const FORWARD_DIRECTION = 1;
-const releaseThreshold = 62;
+const releaseThreshold = 48; // more forgiving
+const HOLD_FRAMES_REQUIRED = 12; // more forgiving
+const FOLLOW_TRAVEL_REQUIRED = 10; // more forgiving
 
 const BX = {
   yellow: "#f1c94c",
@@ -65,7 +71,9 @@ const BX = {
   green: "#8ed857",
   white: "#ffffff",
   navy: "#07121f",
-  red: "#ff6b6b"
+  red: "#ff6b6b",
+  aqua: "#7ef7ff",
+  purple: "#9d7bff"
 };
 
 function setStatus(msg) {
@@ -79,7 +87,6 @@ async function populateCameraSelect() {
   if (!cameraSelect) return;
 
   try {
-    // Ask permission once so labels populate
     const tempStream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: false
@@ -105,7 +112,6 @@ async function populateCameraSelect() {
       cameraSelect.appendChild(option);
     });
 
-    // Prefer OBS or Kinect if found, otherwise first item
     const preferred =
       videoDevices.find(d => /obs virtual camera/i.test(d.label)) ||
       videoDevices.find(d => /azure|kinect/i.test(d.label)) ||
@@ -116,13 +122,12 @@ async function populateCameraSelect() {
 
     cameraSelect.onchange = () => {
       selectedCameraId = cameraSelect.value;
-      console.log("Selected camera changed:", selectedCameraId);
     };
 
     tempStream.getTracks().forEach(track => track.stop());
   } catch (err) {
     console.error("Could not populate camera list:", err);
-    setStatus("Camera permission needed to list available cameras.");
+    setStatus("Camera permission needed to list cameras.");
   }
 }
 
@@ -190,7 +195,7 @@ function playTone(freq = 440, duration = 0.08, type = "sine", volume = 0.04, sli
 }
 
 function playLoad() { playTone(520, 0.08, "triangle", 0.03); }
-function playRelease() { playTone(360, 0.14, "sawtooth", 0.035, 120); }
+function playRelease() { playTone(360, 0.14, "sawtooth", 0.04, 110); }
 function playGood() {
   playTone(760, 0.08, "square", 0.04);
   setTimeout(() => playTone(960, 0.08, "square", 0.035), 50);
@@ -266,7 +271,7 @@ async function startCamera() {
   }
 
   cameraStarted = true;
-  setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
+  setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your hand in the blue box.`);
 
   if (!started) {
     started = true;
@@ -316,10 +321,11 @@ function resetSession() {
   trailDots = [];
   flashes = [];
   confetti = [];
+  starBursts = [];
   characterBall = null;
 
   playReset();
-  setStatus(`Pitch 1/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
+  setStatus(`Pitch 1/${MAX_PITCHES} · Put your hand in the blue box.`);
   drawGame();
 }
 
@@ -368,25 +374,41 @@ async function loop() {
     }
 
     wristScreen = { x: rightWrist.x, y: rightWrist.y };
+    shoulderScreenGlobal = { x: rightShoulder.x, y: rightShoulder.y };
 
-    const shoulderScreen = { x: rightShoulder.x, y: rightShoulder.y };
     const hipScreen = { x: rightHip.x, y: rightHip.y };
     const leftShoulderScreen = { x: leftShoulder.x, y: leftShoulder.y };
 
-    const torsoHeight = Math.abs(hipScreen.y - shoulderScreen.y);
-    const shoulderSpan = Math.abs(shoulderScreen.x - leftShoulderScreen.x);
+    const torsoHeight = Math.abs(hipScreen.y - shoulderScreenGlobal.y);
+    const shoulderSpan = Math.abs(shoulderScreenGlobal.x - leftShoulderScreen.x);
 
-    const boxW = Math.max(shoulderSpan * 0.8, 100);
-    const boxH = Math.max(torsoHeight * 0.7, 120);
+    // More forgiving, larger zones
+    const boxW = Math.max(shoulderSpan * 1.15, 145);
+    const boxH = Math.max(torsoHeight * 0.95, 165);
 
     loadBox = {
-      x: shoulderScreen.x - boxW - 45,
-      y: shoulderScreen.y - boxH * 0.25,
+      x: shoulderScreenGlobal.x - boxW - 50,
+      y: shoulderScreenGlobal.y - boxH * 0.22,
       w: boxW,
       h: boxH
     };
 
+    readyBox = {
+      x: loadBox.x + 12,
+      y: loadBox.y + 12,
+      w: loadBox.w - 24,
+      h: loadBox.h - 24
+    };
+
+    followGuide = {
+      x1: shoulderScreenGlobal.x + 10,
+      y1: shoulderScreenGlobal.y + 18,
+      x2: shoulderScreenGlobal.x + 110,
+      y2: shoulderScreenGlobal.y + 95
+    };
+
     const wristInLoadBox = pointInRect(wristScreen.x, wristScreen.y, loadBox);
+    const wristInReadyBox = pointInRect(wristScreen.x, wristScreen.y, readyBox);
 
     if (phase === "LOAD" && readyLockout) {
       boxState = wristInLoadBox ? "red" : "blue";
@@ -407,7 +429,7 @@ async function loop() {
     armReadyPulse += 0.08;
 
     if (phase === "LOAD") {
-      boxState = "blue";
+      boxState = wristInReadyBox ? "green" : "blue";
     } else if (phase === "ARMED") {
       boxState = wristInLoadBox ? "green" : "red";
     } else if (phase === "FOLLOW") {
@@ -429,37 +451,33 @@ async function loop() {
     if (wristHistory.length > 18) wristHistory.shift();
 
     if (phase === "LOAD") {
-      if (wristInLoadBox) {
+      if (wristInReadyBox) {
         readyPoseFrames++;
 
-        if (readyPoseFrames >= 18) {
+        if (readyPoseFrames >= HOLD_FRAMES_REQUIRED) {
           armReady = true;
           phase = "ARMED";
           formScores.load = 100;
           feedbackText = "ARM READY";
           feedbackTimer = 999999;
           playLoad();
-          spawnBurst(loadBox.x + loadBox.w / 2, loadBox.y + loadBox.h / 2, BX.green, 55);
-          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · ARM READY — THROW FORWARD`);
+          spawnBurst(readyBox.x + readyBox.w / 2, readyBox.y + readyBox.h / 2, BX.green, 60);
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Great load. Throw forward!`);
           wristHistory = [];
         } else {
           armReady = false;
-          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Hold in box...`);
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Hold in the green zone...`);
         }
       } else {
         armReady = false;
         readyPoseFrames = 0;
-        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
+        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Put your hand in the blue box.`);
       }
       return;
     }
 
     if (phase === "ARMED") {
-      if (!wristInLoadBox && wristHistory.length < 6) {
-        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Drifted out — return to box`);
-      }
-
-      if (wristHistory.length >= 6) {
+      if (wristHistory.length >= 5) {
         const first = wristHistory[0];
         const last = wristHistory[wristHistory.length - 1];
 
@@ -468,41 +486,44 @@ async function loop() {
 
         const forwardX = Math.max(0, rawForwardX);
         const power = forwardX + Math.max(0, upwardY) * 0.25;
-        currentPower = Math.min(320, power * 2.25);
+        currentPower = Math.min(360, power * 2.35);
 
         if (forwardX > releaseThreshold) {
           phase = "FOLLOW";
-          formScores.release = Math.min(100, Math.round(power * 1.35));
+          formScores.release = Math.min(100, Math.round(power * 1.45));
 
           feedbackText =
-            power > 130 ? "SUPER HEATER" :
-            power > 100 ? "POWER THROW" :
-            power > 70 ? "FAST BALL" :
+            power > 135 ? "SUPER HEATER" :
+            power > 105 ? "POWER THROW" :
+            power > 72 ? "FAST BALL" :
             "SMOOTH THROW";
 
           feedbackTimer = 60;
 
           playRelease();
-          spawnBurst(wristScreen.x, wristScreen.y, BX.orange, power * 1.45);
-          spawnCharacterBall(wristScreen.x, wristScreen.y, power * 1.25);
+          spawnBurst(wristScreen.x, wristScreen.y, BX.orange, power * 1.55);
+          spawnCharacterBall(wristScreen.x, wristScreen.y, power * 1.3);
+          spawnStarBurst(wristScreen.x, wristScreen.y, power);
 
-          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · FOLLOW THROUGH`);
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Follow through to the orange path!`);
           wristHistory = [];
+        } else {
+          setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Throw forward.`);
         }
       }
       return;
     }
 
-    if (phase === "FOLLOW" && wristHistory.length >= 4) {
+    if (phase === "FOLLOW" && wristHistory.length >= 3) {
       const first = wristHistory[0];
       const last = wristHistory[wristHistory.length - 1];
       const travel = Math.abs(last.x - first.x) + Math.abs(last.y - first.y);
 
-      if (travel > 14) {
-        formScores.follow = Math.min(100, 45 + Math.round(travel * 2.2));
+      if (travel > FOLLOW_TRAVEL_REQUIRED) {
+        formScores.follow = Math.min(100, 52 + Math.round(travel * 2.4));
         finalizeThrow();
       } else {
-        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · FOLLOW THROUGH`);
+        setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Keep following through.`);
       }
     }
   } catch (err) {
@@ -531,29 +552,29 @@ function finalizeThrow() {
     note = "Excellent mechanics!";
     feedbackText = "EXCELLENT FORM";
     burstColor = BX.yellow;
-    burstPower = currentPower * 1.6;
+    burstPower = currentPower * 1.8;
     playGreat();
   } else if (formScores.total >= 75) {
     note = "Strong throw. Nice mechanics.";
     feedbackText = "STRONG FORM";
     burstColor = BX.green;
-    burstPower = currentPower * 1.3;
+    burstPower = currentPower * 1.45;
     playGood();
   } else if (formScores.follow < 55) {
     note = "Good start. Try a bigger follow-through.";
     feedbackText = "FOLLOW THROUGH MORE";
     burstColor = BX.orange;
-    burstPower = currentPower * 1.05;
+    burstPower = currentPower * 1.15;
     playGood();
   } else {
-    note = "Try loading deeper behind your shoulder.";
-    feedbackText = "LOAD DEEPER";
+    note = "Nice start. Load deeper and drive through.";
+    feedbackText = "KEEP GOING";
     burstColor = BX.blue;
-    burstPower = currentPower * 0.95;
+    burstPower = currentPower * 1.05;
     playGood();
   }
 
-  feedbackTimer = 80;
+  feedbackTimer = 90;
   lastResult = {
     total: formScores.total,
     note
@@ -636,6 +657,14 @@ function updateGame() {
     if (c.alpha < 0.05 || c.y > gameCanvas.height + 30) confetti.splice(i, 1);
   }
 
+  for (let i = starBursts.length - 1; i >= 0; i--) {
+    const s = starBursts[i];
+    s.life--;
+    s.scale *= 1.02;
+    s.alpha *= 0.93;
+    if (s.life <= 0 || s.alpha < 0.04) starBursts.splice(i, 1);
+  }
+
   if (characterBall) {
     characterBall.life--;
     characterBall.x += characterBall.vx;
@@ -652,32 +681,32 @@ function updateGame() {
    FX
 ========================= */
 function spawnBurst(x, y, color, power = 40) {
-  const ringCount = 3 + Math.floor(power / 20);
+  const ringCount = 3 + Math.floor(power / 18);
 
   for (let i = 0; i < ringCount; i++) {
     rings.push({
       x,
       y,
-      r: 10 + i * 18,
-      grow: 5 + i * 1.0,
-      alpha: 0.92 - i * 0.08,
-      color
+      r: 12 + i * 20,
+      grow: 5 + i * 1.1,
+      alpha: 0.95 - i * 0.08,
+      color: i % 2 === 0 ? color : BX.aqua
     });
   }
 
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 14; i++) {
     trailDots.push({
       x,
       y,
-      vx: Math.random() * 10 - 5,
-      vy: Math.random() * 10 - 5,
-      size: 6 + Math.random() * 8,
+      vx: Math.random() * 12 - 6,
+      vy: Math.random() * 12 - 6,
+      size: 6 + Math.random() * 9,
       alpha: 0.95,
-      color: i % 2 === 0 ? color : BX.yellow
+      color: [color, BX.yellow, BX.pink, BX.aqua][Math.floor(Math.random() * 4)]
     });
   }
 
-  addFlash(color, 0.15);
+  addFlash(color, 0.18);
 }
 
 function spawnBigImpact(color, power) {
@@ -685,67 +714,82 @@ function spawnBigImpact(color, power) {
   const cy = gameCanvas.height * 0.36;
 
   const ringCount =
-    power > 240 ? 16 :
-    power > 180 ? 12 :
-    power > 120 ? 9 : 7;
+    power > 260 ? 18 :
+    power > 200 ? 14 :
+    power > 140 ? 11 : 8;
 
   const ringScale =
-    power > 240 ? 2.1 :
-    power > 180 ? 1.7 :
-    power > 120 ? 1.35 : 1.08;
+    power > 260 ? 2.25 :
+    power > 200 ? 1.85 :
+    power > 140 ? 1.45 : 1.12;
 
   for (let i = 0; i < ringCount; i++) {
     rings.push({
       x: cx,
       y: cy,
-      r: (24 + i * 26) * ringScale,
-      grow: (6 + i * 0.95) * ringScale,
-      alpha: 0.88 - i * 0.05,
-      color
+      r: (26 + i * 28) * ringScale,
+      grow: (6 + i * 1.05) * ringScale,
+      alpha: 0.9 - i * 0.045,
+      color: i % 3 === 0 ? BX.yellow : i % 3 === 1 ? color : BX.aqua
     });
   }
 
-  for (let i = 0; i < ringCount * 7; i++) {
+  for (let i = 0; i < ringCount * 8; i++) {
     confetti.push({
       x: cx,
       y: cy,
-      vx: Math.random() * 20 - 10,
-      vy: Math.random() * -15 - 2,
-      w: 8 + Math.random() * 15,
+      vx: Math.random() * 22 - 11,
+      vy: Math.random() * -16 - 2,
+      w: 8 + Math.random() * 16,
       h: 5 + Math.random() * 11,
       rot: Math.random() * Math.PI,
-      spin: (Math.random() - 0.5) * 0.6,
+      spin: (Math.random() - 0.5) * 0.65,
       alpha: 1,
-      color: [BX.blue, BX.orange, BX.yellow, BX.green, BX.pink][Math.floor(Math.random() * 5)]
+      color: [BX.blue, BX.orange, BX.yellow, BX.green, BX.pink, BX.purple][Math.floor(Math.random() * 6)]
     });
   }
 
-  for (let i = 0; i < 22; i++) {
+  for (let i = 0; i < 28; i++) {
     trailDots.push({
       x: cx,
       y: cy,
-      vx: Math.random() * 14 - 7,
-      vy: Math.random() * 14 - 7,
-      size: 8 + Math.random() * 13,
+      vx: Math.random() * 16 - 8,
+      vy: Math.random() * 16 - 8,
+      size: 8 + Math.random() * 14,
       alpha: 0.95,
-      color: [BX.blue, BX.orange, BX.yellow, BX.green, BX.pink][Math.floor(Math.random() * 5)]
+      color: [BX.blue, BX.orange, BX.yellow, BX.green, BX.pink, BX.aqua][Math.floor(Math.random() * 6)]
     });
   }
 
-  addFlash(color, 0.34);
+  spawnStarBurst(cx, cy, power * 1.2);
+  addFlash(color, 0.36);
+}
+
+function spawnStarBurst(x, y, power) {
+  const count = power > 180 ? 3 : power > 110 ? 2 : 1;
+  for (let i = 0; i < count; i++) {
+    starBursts.push({
+      x: x + (Math.random() * 80 - 40),
+      y: y + (Math.random() * 80 - 40),
+      scale: 0.8 + Math.random() * 0.5,
+      alpha: 0.9,
+      life: 28 + Math.floor(Math.random() * 10),
+      color: [BX.yellow, BX.aqua, BX.pink, BX.orange][Math.floor(Math.random() * 4)]
+    });
+  }
 }
 
 function spawnCharacterBall(x, y, power) {
   characterBall = {
     x,
     y,
-    vx: 4 + power * 0.04,
-    vy: -2.5 - power * 0.015,
-    life: 42,
+    vx: 4 + power * 0.045,
+    vy: -2.5 - power * 0.016,
+    life: 44,
     rotation: 0,
-    spin: 0.08 + power * 0.0006,
-    size: 20 + Math.min(12, power * 0.05),
-    mood: power > 90 ? "fierce" : "happy"
+    spin: 0.08 + power * 0.0007,
+    size: 22 + Math.min(13, power * 0.055),
+    mood: power > 92 ? "fierce" : "happy"
   };
 }
 
@@ -768,6 +812,7 @@ function drawGame() {
   drawLastResultPanel();
   drawRings();
   drawTrail();
+  drawStarBursts();
   drawCharacterBall();
   drawConfetti();
   drawCelebrationFlash();
@@ -1003,6 +1048,27 @@ function drawTrail() {
   });
 }
 
+function drawStarBursts() {
+  starBursts.forEach((s) => {
+    gameCtx.save();
+    gameCtx.translate(s.x, s.y);
+    gameCtx.scale(s.scale, s.scale);
+    gameCtx.globalAlpha = s.alpha;
+    gameCtx.strokeStyle = s.color;
+    gameCtx.lineWidth = 4;
+
+    for (let i = 0; i < 4; i++) {
+      gameCtx.rotate(Math.PI / 4);
+      gameCtx.beginPath();
+      gameCtx.moveTo(-18, 0);
+      gameCtx.lineTo(18, 0);
+      gameCtx.stroke();
+    }
+
+    gameCtx.restore();
+  });
+}
+
 function drawCharacterBall() {
   if (!characterBall) return;
 
@@ -1092,60 +1158,69 @@ function drawFallbackOverlay() {
 function drawSilhouette(keypoints) {
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-  let fillColor = "rgba(0,140,255,0.22)";
-  let strokeColor = "rgba(0,220,255,1)";
-  let lineWidth = 5;
-  let label = "LOAD BOX";
-
-  if (boxState === "green") {
-    fillColor = "rgba(80,255,140,0.30)";
-    strokeColor = "rgba(80,255,140,1)";
-    lineWidth = 7;
-    label = "ARM READY";
-  } else if (boxState === "red") {
-    fillColor = "rgba(255,90,90,0.28)";
-    strokeColor = "rgba(255,90,90,1)";
-    lineWidth = 7;
-    label = "STAY IN BOX";
-  } else if (boxState === "orange") {
-    fillColor = "rgba(242,154,69,0.24)";
-    strokeColor = "rgba(242,154,69,1)";
-    lineWidth = 6;
-    label = "FOLLOW THROUGH";
-  }
-
-  overlayCtx.fillStyle = fillColor;
-  overlayCtx.strokeStyle = strokeColor;
-  overlayCtx.lineWidth = lineWidth;
-
+  // Outer load box
   if (loadBox) {
+    overlayCtx.fillStyle = "rgba(0,140,255,0.14)";
+    overlayCtx.strokeStyle = "rgba(0,220,255,0.9)";
+    overlayCtx.lineWidth = 4;
     overlayCtx.fillRect(loadBox.x, loadBox.y, loadBox.w, loadBox.h);
     overlayCtx.strokeRect(loadBox.x, loadBox.y, loadBox.w, loadBox.h);
+  }
+
+  // Inner ready box
+  if (readyBox) {
+    let fillColor = "rgba(80,255,140,0.16)";
+    let strokeColor = "rgba(80,255,140,0.95)";
+    let label = "READY ZONE";
+
+    if (boxState === "red") {
+      fillColor = "rgba(255,90,90,0.18)";
+      strokeColor = "rgba(255,90,90,0.95)";
+      label = "GET BACK IN";
+    } else if (boxState === "orange") {
+      fillColor = "rgba(242,154,69,0.18)";
+      strokeColor = "rgba(242,154,69,0.95)";
+      label = "FOLLOW THROUGH";
+    }
+
+    overlayCtx.fillStyle = boxState === "blue" ? "rgba(80,255,140,0.08)" : fillColor;
+    overlayCtx.strokeStyle = boxState === "blue" ? "rgba(80,255,140,0.55)" : strokeColor;
+    overlayCtx.lineWidth = boxState === "green" ? 7 : 5;
+    overlayCtx.fillRect(readyBox.x, readyBox.y, readyBox.w, readyBox.h);
+    overlayCtx.strokeRect(readyBox.x, readyBox.y, readyBox.w, readyBox.h);
 
     if (boxState === "green") {
       overlayCtx.beginPath();
-      overlayCtx.strokeStyle = "rgba(80,255,140,0.65)";
+      overlayCtx.strokeStyle = "rgba(80,255,140,0.7)";
       overlayCtx.lineWidth = 4;
       overlayCtx.arc(
-        loadBox.x + loadBox.w / 2,
-        loadBox.y + loadBox.h / 2,
+        readyBox.x + readyBox.w / 2,
+        readyBox.y + readyBox.h / 2,
         18 + Math.sin(armReadyPulse) * 10,
         0,
         Math.PI * 2
       );
       overlayCtx.stroke();
+      label = "ARM READY";
     }
 
-    overlayCtx.fillStyle = "rgba(255,255,255,0.95)";
+    overlayCtx.fillStyle = "rgba(255,255,255,0.96)";
     overlayCtx.font = "bold 20px Arial";
-    overlayCtx.fillText(label, loadBox.x, Math.max(24, loadBox.y - 10));
-  } else {
-    overlayCtx.fillRect(40, 80, 120, 140);
-    overlayCtx.strokeRect(40, 80, 120, 140);
+    overlayCtx.fillText(label, readyBox.x, Math.max(24, readyBox.y - 10));
+  }
 
-    overlayCtx.fillStyle = "rgba(255,255,255,0.95)";
-    overlayCtx.font = "bold 20px Arial";
-    overlayCtx.fillText("TEST BOX", 40, 68);
+  // Follow guide
+  if (followGuide && (phase === "ARMED" || phase === "FOLLOW")) {
+    overlayCtx.strokeStyle = phase === "FOLLOW" ? "rgba(242,154,69,0.95)" : "rgba(242,154,69,0.4)";
+    overlayCtx.lineWidth = 6;
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(followGuide.x1, followGuide.y1);
+    overlayCtx.lineTo(followGuide.x2, followGuide.y2);
+    overlayCtx.stroke();
+
+    overlayCtx.beginPath();
+    overlayCtx.arc(followGuide.x2, followGuide.y2, 14, 0, Math.PI * 2);
+    overlayCtx.stroke();
   }
 
   overlayCtx.strokeStyle =
