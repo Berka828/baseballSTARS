@@ -8,40 +8,42 @@
 </head>
 <body>
   <div class="appShell">
-
-    <div class="topBar">
-      <div class="brandBlock">
-        <div class="eyebrow">BXCM JR. SLUGGERS ACADEMY</div>
-        <h1>Pitch Lab</h1>
-        <p>Load your arm, throw forward, hit the zone.</p>
-      </div>
-
-      <div class="controls">
-        <select id="cameraSelect"></select>
-        <button id="startBtn">Start Camera</button>
-        <button id="resetBtn" class="secondary">Reset Game</button>
-      </div>
+  <div class="topBar">
+    <div class="titleBlock">
+      <p class="eyebrow">BxCM Jr. Sluggers Academy</p>
+      <h1>Pitch Lab</h1>
+      <p class="sub">Load your arm, throw forward, hit the zone.</p>
     </div>
 
-    <div class="mainGrid">
-      <div class="posePanel">
-        <div class="panelTitle">Player Silhouette</div>
-
-        <div class="videoWrap">
-          <video id="webcam" autoplay playsinline muted></video>
-          <canvas id="overlay"></canvas>
-          <div class="videoTint"></div>
-        </div>
-
-        <div id="status">Move your throwing hand into the blue box.</div>
-      </div>
-
-      <div class="gamePanel">
-        <div class="panelTitle">Pitch Field</div>
-        <canvas id="gameCanvas" width="1400" height="820"></canvas>
-      </div>
+    <div class="controls">
+      <select id="cameraSelect"></select>
+      <button id="startBtn">Start Camera</button>
+      <button id="resetBtn" class="secondary">Reset Game</button>
     </div>
   </div>
+
+  <div class="mainGrid">
+    <aside class="sidePanel">
+      <div class="panelTag">Player Silhouette</div>
+
+      <div class="videoWrap">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="videoTint"></div>
+      </div>
+
+      <div class="statusCard">
+        <p id="status">Press Start Camera to begin.</p>
+      </div>
+    </aside>
+
+    <section id="gamePanel">
+      <div class="gameCanvasWrap">
+        <canvas id="gameCanvas" width="1365" height="768"></canvas>
+      </div>
+    </section>
+  </div>
+</div>
 
   <!-- TensorFlow / Pose Detection -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
