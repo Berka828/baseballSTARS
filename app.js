@@ -27,10 +27,14 @@ let isEstimating = false;
 
 let wristScreen = null;
 let shoulderScreen = null;
+let elbowScreen = null;
 
 let loadBox = null;
 let readyBox = null;
-let target = null;
+let targetCenter = null;
+let targetOuterR = 150;
+let targetMidR = 95;
+let targetInnerR = 46;
 let followGuide = null;
 
 let wristHistory = [];
@@ -38,7 +42,7 @@ let readyFrames = 0;
 let readyLockout = false;
 let throwCooldown = false;
 
-let phase = "LOAD"; // LOAD / READY / FOLLOW / RESET / DONE
+let phase = "LOAD"; // LOAD / READY / RESET / DONE
 let pitchCount = 0;
 const MAX_PITCHES = 6;
 
@@ -50,13 +54,15 @@ let rings = [];
 let sparks = [];
 let confetti = [];
 let flashes = [];
+let starBursts = [];
 
 let bgFade = 0;
 let bgFadeTarget = 0;
 
 const FORWARD_DIRECTION = 1; // set to -1 if throw direction feels backwards
 const HOLD_FRAMES_REQUIRED = 5;
-const RELEASE_THRESHOLD = 34;
+const RELEASE_THRESHOLD = 32;
+const MAX_HISTORY = 20;
 
 const COLORS = {
   blue: "#6cc7ff",
@@ -71,10 +77,10 @@ const COLORS = {
   dark: "#07131f"
 };
 
-// target center inside the Pelham image
-// tweak only if needed
-const MITT_U = 0.765; // x % across image
-const MITT_V = 0.405; // y % down image
+// normalized mitt center inside your image.
+// adjust later only if needed.
+const MITT_U = 0.765;
+const MITT_V = 0.405;
 
 function setStatus(text) {
   if (statusText) statusText.textContent = text;
@@ -151,8 +157,8 @@ function playLoad() {
 }
 
 function playThrow() {
-  playTone(260, 0.08, "sawtooth", 0.05, 520);
-  setTimeout(() => playNoise(0.05, 0.018, 1400), 20);
+  playTone(240, 0.08, "sawtooth", 0.05, 540);
+  setTimeout(() => playNoise(0.05, 0.018, 1400), 18);
 }
 
 function playHit() {
@@ -162,7 +168,7 @@ function playHit() {
 
 function playNear() {
   playTone(720, 0.05, "triangle", 0.04);
-  setTimeout(() => playTone(870, 0.07, "triangle", 0.032), 35);
+  setTimeout(() => playTone(860, 0.07, "triangle", 0.032), 35);
 }
 
 function playMiss() {
@@ -314,6 +320,7 @@ function resetGame() {
   sparks = [];
   confetti = [];
   flashes = [];
+  starBursts = [];
 
   playReset();
   setStatus(`Pitch 1/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
@@ -382,13 +389,15 @@ function processPose() {
 
   const rightWrist = findKeypoint(latestKeypoints, "right_wrist");
   const rightShoulder = findKeypoint(latestKeypoints, "right_shoulder");
+  const rightElbow = findKeypoint(latestKeypoints, "right_elbow");
   const rightHip = findKeypoint(latestKeypoints, "right_hip");
   const leftShoulder = findKeypoint(latestKeypoints, "left_shoulder");
 
   if (
-    !rightWrist || !rightShoulder || !rightHip || !leftShoulder ||
+    !rightWrist || !rightShoulder || !rightElbow || !rightHip || !leftShoulder ||
     rightWrist.score < 0.2 ||
     rightShoulder.score < 0.2 ||
+    rightElbow.score < 0.2 ||
     rightHip.score < 0.2 ||
     leftShoulder.score < 0.2
   ) {
@@ -398,11 +407,11 @@ function processPose() {
 
   wristScreen = { x: rightWrist.x, y: rightWrist.y };
   shoulderScreen = { x: rightShoulder.x, y: rightShoulder.y };
+  elbowScreen = { x: rightElbow.x, y: rightElbow.y };
 
   const torsoHeight = Math.abs(rightHip.y - rightShoulder.y);
   const shoulderSpan = Math.abs(rightShoulder.x - leftShoulder.x);
 
-  // Easier, bigger, closer to body
   const boxW = Math.max(shoulderSpan * 1.45, 190);
   const boxH = Math.max(torsoHeight * 1.20, 220);
 
@@ -427,19 +436,16 @@ function processPose() {
     gameCanvas.height
   );
 
-  target = {
-    x: bgRect.x + bgRect.w * MITT_U,
-    y: bgRect.y + bgRect.h * MITT_V,
-    outerR: 120,
-    middleR: 80,
-    innerR: 42
-  };
+  const mittCenterX = bgRect.x + bgRect.w * MITT_U;
+  const mittCenterY = bgRect.y + bgRect.h * MITT_V;
+
+  targetCenter = { x: mittCenterX, y: mittCenterY };
 
   followGuide = {
-    x1: target.x - 10,
-    y1: target.y + 10,
-    x2: target.x + 90,
-    y2: target.y + 92
+    x1: mittCenterX - 14,
+    y1: mittCenterY + 10,
+    x2: mittCenterX + 88,
+    y2: mittCenterY + 96
   };
 
   if (phase === "DONE" || throwCooldown) return;
@@ -463,7 +469,10 @@ function processPose() {
     y: wristScreen.y,
     t: performance.now()
   });
-  if (wristHistory.length > 18) wristHistory.shift();
+
+  if (wristHistory.length > MAX_HISTORY) {
+    wristHistory.shift();
+  }
 
   if (phase === "LOAD") {
     if (inReady) {
@@ -495,7 +504,7 @@ function processPose() {
 
       const forwardX = Math.max(0, rawForwardX);
       const power = forwardX + Math.max(0, upwardY) * 0.30;
-      currentPower = Math.min(400, power * 3.0);
+      currentPower = Math.min(420, power * 3.2);
 
       if (forwardX > RELEASE_THRESHOLD) {
         triggerThrow(power);
@@ -503,7 +512,6 @@ function processPose() {
         setStatus(`Pitch ${pitchCount + 1}/${MAX_PITCHES} · Throw to Pelham.`);
       }
     }
-    return;
   }
 }
 
@@ -511,52 +519,80 @@ function processPose() {
    THROW LOGIC
 ========================= */
 function triggerThrow(power) {
-  if (!wristScreen || !target) return;
+  if (!wristScreen || !targetCenter || !shoulderScreen || !elbowScreen) return;
 
-  const dist = Math.hypot(wristScreen.x - target.x, wristScreen.y - target.y);
-  const centerFactor = clamp(1 - dist / target.outerR, 0, 1);
+  // Estimate projected landing from motion, not just raw wrist point.
+  // Kids can also physically throw a soft ball at the wall at the same time.
+  const histFirst = wristHistory[0] || wristScreen;
+  const histLast = wristHistory[wristHistory.length - 1] || wristScreen;
+
+  const motionDx = (histLast.x - histFirst.x) * FORWARD_DIRECTION;
+  const motionDy = histFirst.y - histLast.y;
+
+  const shoulderToWristX = (wristScreen.x - shoulderScreen.x) * FORWARD_DIRECTION;
+  const shoulderToWristY = shoulderScreen.y - wristScreen.y;
+
+  const elbowToWristX = (wristScreen.x - elbowScreen.x) * FORWARD_DIRECTION;
+  const elbowToWristY = elbowScreen.y - wristScreen.y;
+
+  const aimX =
+    targetCenter.x +
+    clamp(shoulderToWristX * 1.2 + motionDx * 0.9 + elbowToWristX * 0.6, -180, 180);
+
+  const aimY =
+    targetCenter.y -
+    clamp(shoulderToWristY * 0.9 + motionDy * 0.85 + elbowToWristY * 0.4, -120, 140);
+
+  const projectedHit = {
+    x: clamp(aimX, 40, gameCanvas.width - 40),
+    y: clamp(aimY, 70, gameCanvas.height - 60)
+  };
+
+  const dist = Math.hypot(projectedHit.x - targetCenter.x, projectedHit.y - targetCenter.y);
+  const centerFactor = clamp(1 - dist / targetOuterR, 0, 1);
   const throwFactor = clamp(power / 220, 0, 1);
 
   playThrow();
 
-  // always reward the throw
+  // release FX at player hand
   spawnBurst(
     wristScreen.x,
     wristScreen.y,
     COLORS.orange,
-    120 + power * 0.6
+    120 + power * 0.7
   );
 
-  if (dist <= target.innerR) {
+  // impact FX at estimated Pelham location
+  if (dist <= targetInnerR) {
     feedbackText = "BULLSEYE!";
     playHit();
-
-    const impactPower = 220 + centerFactor * 180 + throwFactor * 80;
-    spawnBigImpact(COLORS.yellow, impactPower);
     flashGamePanel();
-  } else if (dist <= target.middleR) {
+
+    const impactPower = 260 + centerFactor * 220 + throwFactor * 110;
+    spawnBigImpact(projectedHit.x, projectedHit.y, COLORS.yellow, impactPower);
+  } else if (dist <= targetMidR) {
     feedbackText = "TARGET HIT";
     playHit();
-
-    const impactPower = 170 + centerFactor * 140 + throwFactor * 70;
-    spawnBigImpact(COLORS.green, impactPower);
     flashGamePanel();
-  } else if (dist <= target.outerR) {
+
+    const impactPower = 190 + centerFactor * 170 + throwFactor * 90;
+    spawnBigImpact(projectedHit.x, projectedHit.y, COLORS.green, impactPower);
+  } else if (dist <= targetOuterR) {
     feedbackText = "NICE TRY";
     playNear();
 
-    const impactPower = 110 + centerFactor * 90 + throwFactor * 50;
-    spawnBigImpact(COLORS.orange, impactPower);
+    const impactPower = 120 + centerFactor * 100 + throwFactor * 70;
+    spawnBigImpact(projectedHit.x, projectedHit.y, COLORS.orange, impactPower);
   } else {
     feedbackText = "BIG THROW!";
     playMiss();
 
-    const missPower = 90 + throwFactor * 60;
-    spawnBigImpact(COLORS.pink, missPower);
+    const impactPower = 90 + throwFactor * 65;
+    spawnBigImpact(projectedHit.x, projectedHit.y, COLORS.pink, impactPower);
   }
 
   feedbackTimer = 75;
-  phase = "FOLLOW";
+  phase = "RESET";
   throwCooldown = true;
   pitchCount++;
 
@@ -570,15 +606,14 @@ function triggerThrow(power) {
     if (finalPitch) {
       phase = "DONE";
       feedbackText = "ROUND COMPLETE";
-      feedbackTimer = 170;
+      feedbackTimer = 180;
       setStatus("Nice work! Press Reset Game to play again.");
       setTimeout(() => {
         throwCooldown = false;
-      }, 2200);
+      }, 2300);
       return;
     }
 
-    phase = "RESET";
     readyLockout = true;
     readyFrames = 0;
     wristHistory = [];
@@ -643,6 +678,14 @@ function updateFX() {
     if (flashes[i].alpha < 0.04) flashes.splice(i, 1);
   }
 
+  for (let i = starBursts.length - 1; i >= 0; i--) {
+    const s = starBursts[i];
+    s.life--;
+    s.scale *= 1.02;
+    s.alpha *= 0.93;
+    if (s.life <= 0 || s.alpha < 0.04) starBursts.splice(i, 1);
+  }
+
   if (feedbackTimer > 0 && feedbackTimer < 999999) feedbackTimer--;
 }
 
@@ -678,29 +721,24 @@ function spawnBurst(x, y, color, power = 80) {
   flashes.push({ color, alpha: 0.18 });
 }
 
-function spawnBigImpact(color, power = 160) {
-  if (!target) return;
-
-  const x = target.x;
-  const y = target.y;
-
+function spawnBigImpact(x, y, color, power = 160) {
   const ringCount =
-    power > 300 ? 20 :
-    power > 220 ? 16 :
-    power > 160 ? 12 : 8;
+    power > 320 ? 22 :
+    power > 240 ? 18 :
+    power > 170 ? 13 : 9;
 
   const ringScale =
-    power > 300 ? 2.8 :
-    power > 220 ? 2.2 :
-    power > 160 ? 1.75 : 1.15;
+    power > 320 ? 3.1 :
+    power > 240 ? 2.45 :
+    power > 170 ? 1.9 : 1.25;
 
   for (let i = 0; i < ringCount; i++) {
     rings.push({
       x,
       y,
-      r: (20 + i * 26) * ringScale,
-      grow: (6 + i * 1.0) * ringScale,
-      alpha: 0.94 - i * 0.045,
+      r: (18 + i * 24) * ringScale,
+      grow: (5 + i * 1.0) * ringScale,
+      alpha: 0.95 - i * 0.042,
       color: i % 3 === 0 ? COLORS.yellow : i % 3 === 1 ? color : COLORS.aqua
     });
   }
@@ -720,7 +758,7 @@ function spawnBigImpact(color, power = 160) {
     });
   }
 
-  for (let i = 0; i < 28; i++) {
+  for (let i = 0; i < 30; i++) {
     sparks.push({
       x,
       y,
@@ -729,6 +767,17 @@ function spawnBigImpact(color, power = 160) {
       size: 8 + Math.random() * 15,
       alpha: 0.98,
       color: [COLORS.yellow, COLORS.aqua, COLORS.orange, COLORS.pink][Math.floor(Math.random() * 4)]
+    });
+  }
+
+  for (let i = 0; i < 3; i++) {
+    starBursts.push({
+      x: x + (Math.random() * 90 - 45),
+      y: y + (Math.random() * 90 - 45),
+      scale: 0.9 + Math.random() * 0.7,
+      alpha: 0.95,
+      life: 30 + Math.floor(Math.random() * 14),
+      color: [COLORS.yellow, COLORS.aqua, COLORS.pink, COLORS.orange][Math.floor(Math.random() * 4)]
     });
   }
 
@@ -742,12 +791,13 @@ function drawGame() {
   gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
 
   drawBackground();
-  drawTargetPulse();
+  drawTargetGlow();
   drawHUD();
   drawTopFade();
   drawRings();
   drawSparks();
   drawConfetti();
+  drawStarBursts();
   drawFlashes();
 }
 
@@ -764,38 +814,38 @@ function drawBackground() {
     gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
   }
 
-  // gradual darker fade when game comes on
-  const darkAlpha = 0.10 + bgFade * 0.30;
+  // darker than before
+  const darkAlpha = 0.28 + bgFade * 0.48;
   gameCtx.fillStyle = `rgba(5, 12, 22, ${darkAlpha})`;
   gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
 }
 
-function drawTargetPulse() {
-  if (!target || phase === "DONE") return;
+function drawTargetGlow() {
+  if (!targetCenter || phase === "DONE") return;
 
   const pulse = 1 + Math.sin(performance.now() * 0.006) * 0.06;
 
   const g = gameCtx.createRadialGradient(
-    target.x,
-    target.y,
+    targetCenter.x,
+    targetCenter.y,
     10,
-    target.x,
-    target.y,
-    target.outerR * 0.95 * pulse
+    targetCenter.x,
+    targetCenter.y,
+    targetOuterR * pulse
   );
 
-  g.addColorStop(0, "rgba(255,220,120,0.18)");
+  g.addColorStop(0, "rgba(255,220,120,0.20)");
   g.addColorStop(0.45, "rgba(255,220,120,0.08)");
   g.addColorStop(1, "rgba(255,220,120,0)");
 
   gameCtx.fillStyle = g;
   gameCtx.beginPath();
-  gameCtx.arc(target.x, target.y, target.outerR * 0.95 * pulse, 0, Math.PI * 2);
+  gameCtx.arc(targetCenter.x, targetCenter.y, targetOuterR * pulse, 0, Math.PI * 2);
   gameCtx.fill();
 }
 
 function drawHUD() {
-  gameCtx.fillStyle = "rgba(6,16,28,0.76)";
+  gameCtx.fillStyle = "rgba(6,16,28,0.78)";
   roundRectFill(30, 24, 320, 44, 18);
   roundRectFill(1040, 24, 250, 104, 20);
   roundRectFill(420, 22, 520, 90, 24);
@@ -826,7 +876,7 @@ function drawHUD() {
   gameCtx.fillStyle =
     phase === "LOAD" ? COLORS.blue :
     phase === "READY" ? COLORS.green :
-    phase === "FOLLOW" ? COLORS.orange :
+    phase === "RESET" ? COLORS.orange :
     phase === "DONE" ? COLORS.yellow :
     COLORS.white;
 
@@ -844,7 +894,7 @@ function drawHUD() {
 
 function drawTopFade() {
   const topFade = gameCtx.createLinearGradient(0, 0, 0, 160);
-  topFade.addColorStop(0, "rgba(0,0,0,0.62)");
+  topFade.addColorStop(0, "rgba(0,0,0,0.68)");
   topFade.addColorStop(1, "rgba(0,0,0,0)");
   gameCtx.fillStyle = topFade;
   gameCtx.fillRect(0, 0, gameCanvas.width, 160);
@@ -877,6 +927,27 @@ function drawConfetti() {
     gameCtx.rotate(c.rot);
     gameCtx.fillStyle = c.color;
     gameCtx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+    gameCtx.restore();
+  });
+}
+
+function drawStarBursts() {
+  starBursts.forEach((s) => {
+    gameCtx.save();
+    gameCtx.translate(s.x, s.y);
+    gameCtx.scale(s.scale, s.scale);
+    gameCtx.globalAlpha = s.alpha;
+    gameCtx.strokeStyle = s.color;
+    gameCtx.lineWidth = 4;
+
+    for (let i = 0; i < 4; i++) {
+      gameCtx.rotate(Math.PI / 4);
+      gameCtx.beginPath();
+      gameCtx.moveTo(-18, 0);
+      gameCtx.lineTo(18, 0);
+      gameCtx.stroke();
+    }
+
     gameCtx.restore();
   });
 }
@@ -915,7 +986,7 @@ function drawOverlay() {
     overlayCtx.strokeRect(readyBox.x, readyBox.y, readyBox.w, readyBox.h);
   }
 
-  if (followGuide && phase === "FOLLOW") {
+  if (followGuide && phase === "RESET") {
     overlayCtx.strokeStyle = "rgba(242,154,69,0.88)";
     overlayCtx.lineWidth = 5;
     overlayCtx.beginPath();
@@ -926,7 +997,7 @@ function drawOverlay() {
 
   overlayCtx.strokeStyle =
     phase === "READY" ? "rgba(80,255,140,0.98)" :
-    phase === "FOLLOW" ? "rgba(242,154,69,0.98)" :
+    phase === "RESET" ? "rgba(242,154,69,0.98)" :
     "rgba(111,214,255,0.98)";
 
   overlayCtx.lineWidth = 6;
@@ -953,7 +1024,7 @@ function drawOverlay() {
   if (wristScreen) {
     overlayCtx.fillStyle =
       phase === "READY" ? "rgba(80,255,140,1)" :
-      phase === "FOLLOW" ? "rgba(242,154,69,1)" :
+      phase === "RESET" ? "rgba(242,154,69,1)" :
       "rgba(255,255,255,1)";
 
     overlayCtx.beginPath();
