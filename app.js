@@ -55,9 +55,16 @@ let sparks = [];
 let confetti = [];
 let flashes = [];
 let starBursts = [];
+let projectiles = [];
+let hitLabels = [];
 
 let bgFade = 0;
 let bgFadeTarget = 0;
+let mittFlash = 0;
+let mittPulse = 0;
+let shakePower = 0;
+let shakeX = 0;
+let shakeY = 0;
 
 const FORWARD_DIRECTION = 1; // set to -1 if throw direction feels backwards
 const HOLD_FRAMES_REQUIRED = 5;
@@ -77,8 +84,7 @@ const COLORS = {
   dark: "#07131f"
 };
 
-// normalized mitt center inside your image.
-// adjust later only if needed.
+// mitt position inside background image
 const MITT_U = 0.765;
 const MITT_V = 0.405;
 
@@ -157,8 +163,8 @@ function playLoad() {
 }
 
 function playThrow() {
-  playTone(240, 0.08, "sawtooth", 0.05, 540);
-  setTimeout(() => playNoise(0.05, 0.018, 1400), 18);
+  playTone(240, 0.08, "sawtooth", 0.045, 540);
+  setTimeout(() => playNoise(0.04, 0.015, 1600), 18);
 }
 
 function playHit() {
@@ -321,6 +327,11 @@ function resetGame() {
   confetti = [];
   flashes = [];
   starBursts = [];
+  projectiles = [];
+  hitLabels = [];
+  mittFlash = 0;
+  mittPulse = 0;
+  shakePower = 0;
 
   playReset();
   setStatus(`Pitch 1/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
@@ -413,7 +424,7 @@ function processPose() {
   const shoulderSpan = Math.abs(rightShoulder.x - leftShoulder.x);
 
   const boxW = Math.max(shoulderSpan * 1.45, 190);
-  const boxH = Math.max(torsoHeight * 1.20, 220);
+  const boxH = Math.max(torsoHeight * 1.2, 220);
 
   loadBox = {
     x: shoulderScreen.x - boxW - 8,
@@ -436,16 +447,16 @@ function processPose() {
     gameCanvas.height
   );
 
-  const mittCenterX = bgRect.x + bgRect.w * MITT_U;
-  const mittCenterY = bgRect.y + bgRect.h * MITT_V;
-
-  targetCenter = { x: mittCenterX, y: mittCenterY };
+  targetCenter = {
+    x: bgRect.x + bgRect.w * MITT_U,
+    y: bgRect.y + bgRect.h * MITT_V
+  };
 
   followGuide = {
-    x1: mittCenterX - 14,
-    y1: mittCenterY + 10,
-    x2: mittCenterX + 88,
-    y2: mittCenterY + 96
+    x1: targetCenter.x - 14,
+    y1: targetCenter.y + 10,
+    x2: targetCenter.x + 88,
+    y2: targetCenter.y + 96
   };
 
   if (phase === "DONE" || throwCooldown) return;
@@ -521,8 +532,6 @@ function processPose() {
 function triggerThrow(power) {
   if (!wristScreen || !targetCenter || !shoulderScreen || !elbowScreen) return;
 
-  // Estimate projected landing from motion, not just raw wrist point.
-  // Kids can also physically throw a soft ball at the wall at the same time.
   const histFirst = wristHistory[0] || wristScreen;
   const histLast = wristHistory[wristHistory.length - 1] || wristScreen;
 
@@ -554,44 +563,56 @@ function triggerThrow(power) {
 
   playThrow();
 
-  // release FX at player hand
-  spawnBurst(
-    wristScreen.x,
-    wristScreen.y,
-    COLORS.orange,
-    120 + power * 0.7
-  );
+  // small release cue only
+  spawnReleaseTrail(wristScreen.x, wristScreen.y, projectedHit.x, projectedHit.y, throwFactor);
 
-  // impact FX at estimated Pelham location
+  let impactPower;
+  let impactColor;
+  let label;
+  let labelColor;
+  let shake;
+
   if (dist <= targetInnerR) {
-    feedbackText = "BULLSEYE!";
+    label = "BULLSEYE!";
+    labelColor = COLORS.yellow;
+    impactColor = COLORS.yellow;
+    impactPower = 260 + centerFactor * 220 + throwFactor * 110;
+    shake = 16;
     playHit();
     flashGamePanel();
-
-    const impactPower = 260 + centerFactor * 220 + throwFactor * 110;
-    spawnBigImpact(projectedHit.x, projectedHit.y, COLORS.yellow, impactPower);
   } else if (dist <= targetMidR) {
-    feedbackText = "TARGET HIT";
+    label = "TARGET HIT";
+    labelColor = COLORS.green;
+    impactColor = COLORS.green;
+    impactPower = 190 + centerFactor * 170 + throwFactor * 90;
+    shake = 11;
     playHit();
     flashGamePanel();
-
-    const impactPower = 190 + centerFactor * 170 + throwFactor * 90;
-    spawnBigImpact(projectedHit.x, projectedHit.y, COLORS.green, impactPower);
   } else if (dist <= targetOuterR) {
-    feedbackText = "NICE TRY";
+    label = "NICE TRY";
+    labelColor = COLORS.orange;
+    impactColor = COLORS.orange;
+    impactPower = 120 + centerFactor * 100 + throwFactor * 70;
+    shake = 7;
     playNear();
-
-    const impactPower = 120 + centerFactor * 100 + throwFactor * 70;
-    spawnBigImpact(projectedHit.x, projectedHit.y, COLORS.orange, impactPower);
   } else {
-    feedbackText = "BIG THROW!";
+    label = "BIG THROW!";
+    labelColor = COLORS.pink;
+    impactColor = COLORS.pink;
+    impactPower = 90 + throwFactor * 65;
+    shake = 4;
     playMiss();
-
-    const impactPower = 90 + throwFactor * 65;
-    spawnBigImpact(projectedHit.x, projectedHit.y, COLORS.pink, impactPower);
   }
 
+  feedbackText = label;
   feedbackTimer = 75;
+
+  spawnBigImpact(projectedHit.x, projectedHit.y, impactColor, impactPower);
+  spawnHitLabel(projectedHit.x, projectedHit.y - 24, label, labelColor);
+  shakePower = Math.max(shakePower, shake);
+  mittFlash = 1;
+  mittPulse = 1;
+
   phase = "RESET";
   throwCooldown = true;
   pitchCount++;
@@ -632,6 +653,46 @@ function triggerThrow(power) {
 }
 
 /* =========================
+   RELEASE TRAIL + LABELS
+========================= */
+function spawnReleaseTrail(x1, y1, x2, y2, throwFactor) {
+  projectiles.push({
+    x1,
+    y1,
+    x2,
+    y2,
+    progress: 0,
+    speed: 0.16 + throwFactor * 0.10,
+    alpha: 0.95,
+    color: throwFactor > 0.6 ? COLORS.orange : COLORS.aqua,
+    width: 4 + throwFactor * 4
+  });
+
+  for (let i = 0; i < 8; i++) {
+    sparks.push({
+      x: x1,
+      y: y1,
+      vx: Math.random() * 6 - 3,
+      vy: Math.random() * 6 - 3,
+      size: 3 + Math.random() * 4,
+      alpha: 0.72,
+      color: i % 2 === 0 ? COLORS.aqua : COLORS.orange
+    });
+  }
+}
+
+function spawnHitLabel(x, y, text, color) {
+  hitLabels.push({
+    x,
+    y,
+    text,
+    color,
+    alpha: 1,
+    vy: -0.35
+  });
+}
+
+/* =========================
    GAME PANEL FLASH
 ========================= */
 function flashGamePanel() {
@@ -647,6 +708,13 @@ function flashGamePanel() {
 ========================= */
 function updateFX() {
   bgFade += (bgFadeTarget - bgFade) * 0.06;
+
+  mittFlash *= 0.90;
+  mittPulse *= 0.92;
+
+  shakePower *= 0.86;
+  shakeX = (Math.random() * 2 - 1) * shakePower;
+  shakeY = (Math.random() * 2 - 1) * shakePower;
 
   for (let i = rings.length - 1; i >= 0; i--) {
     rings[i].r += rings[i].grow;
@@ -686,41 +754,30 @@ function updateFX() {
     if (s.life <= 0 || s.alpha < 0.04) starBursts.splice(i, 1);
   }
 
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.progress += p.speed;
+    p.alpha *= 0.97;
+    if (p.progress >= 1 || p.alpha < 0.04) {
+      projectiles.splice(i, 1);
+    }
+  }
+
+  for (let i = hitLabels.length - 1; i >= 0; i--) {
+    const h = hitLabels[i];
+    h.y += h.vy;
+    h.alpha *= 0.95;
+    if (h.alpha < 0.05) {
+      hitLabels.splice(i, 1);
+    }
+  }
+
   if (feedbackTimer > 0 && feedbackTimer < 999999) feedbackTimer--;
 }
 
 /* =========================
    FX SPAWN
 ========================= */
-function spawnBurst(x, y, color, power = 80) {
-  const ringCount = 4 + Math.floor(power / 28);
-
-  for (let i = 0; i < ringCount; i++) {
-    rings.push({
-      x,
-      y,
-      r: 18 + i * 24,
-      grow: 6 + i * 1.25,
-      alpha: 0.98 - i * 0.08,
-      color: i % 2 === 0 ? color : COLORS.aqua
-    });
-  }
-
-  for (let i = 0; i < 28; i++) {
-    sparks.push({
-      x,
-      y,
-      vx: Math.random() * 16 - 8,
-      vy: Math.random() * 16 - 8,
-      size: 7 + Math.random() * 12,
-      alpha: 0.98,
-      color: [color, COLORS.yellow, COLORS.pink, COLORS.aqua][Math.floor(Math.random() * 4)]
-    });
-  }
-
-  flashes.push({ color, alpha: 0.18 });
-}
-
 function spawnBigImpact(x, y, color, power = 160) {
   const ringCount =
     power > 320 ? 22 :
@@ -790,21 +847,47 @@ function spawnBigImpact(x, y, color, power = 160) {
 function drawGame() {
   gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
 
+  gameCtx.save();
+  gameCtx.translate(shakeX, shakeY);
+
   drawBackground();
   drawTargetGlow();
+  drawProjectileTrails();
   drawHUD();
   drawTopFade();
   drawRings();
   drawSparks();
   drawConfetti();
   drawStarBursts();
+  drawHitLabels();
   drawFlashes();
+
+  gameCtx.restore();
 }
 
 function drawBackground() {
   if (pelhamBgLoaded) {
     const r = getCoverRect(pelhamBg.width, pelhamBg.height, gameCanvas.width, gameCanvas.height);
     gameCtx.drawImage(pelhamBg, r.x, r.y, r.w, r.h);
+
+    // mitt flash over exact mitt area
+    if (targetCenter && mittFlash > 0.01) {
+      const g = gameCtx.createRadialGradient(
+        targetCenter.x,
+        targetCenter.y,
+        6,
+        targetCenter.x,
+        targetCenter.y,
+        120 + mittPulse * 40
+      );
+      g.addColorStop(0, `rgba(255,245,180,${0.32 * mittFlash})`);
+      g.addColorStop(0.5, `rgba(255,215,80,${0.18 * mittFlash})`);
+      g.addColorStop(1, "rgba(255,215,80,0)");
+      gameCtx.fillStyle = g;
+      gameCtx.beginPath();
+      gameCtx.arc(targetCenter.x, targetCenter.y, 130 + mittPulse * 28, 0, Math.PI * 2);
+      gameCtx.fill();
+    }
   } else {
     const bg = gameCtx.createLinearGradient(0, 0, 0, gameCanvas.height);
     bg.addColorStop(0, "#173149");
@@ -814,7 +897,6 @@ function drawBackground() {
     gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
   }
 
-  // darker than before
   const darkAlpha = 0.28 + bgFade * 0.48;
   gameCtx.fillStyle = `rgba(5, 12, 22, ${darkAlpha})`;
   gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
@@ -823,7 +905,7 @@ function drawBackground() {
 function drawTargetGlow() {
   if (!targetCenter || phase === "DONE") return;
 
-  const pulse = 1 + Math.sin(performance.now() * 0.006) * 0.06;
+  const pulse = 1 + Math.sin(performance.now() * 0.006) * 0.06 + mittPulse * 0.06;
 
   const g = gameCtx.createRadialGradient(
     targetCenter.x,
@@ -842,6 +924,30 @@ function drawTargetGlow() {
   gameCtx.beginPath();
   gameCtx.arc(targetCenter.x, targetCenter.y, targetOuterR * pulse, 0, Math.PI * 2);
   gameCtx.fill();
+}
+
+function drawProjectileTrails() {
+  projectiles.forEach((p) => {
+    const curX = lerp(p.x1, p.x2, p.progress);
+    const curY = lerp(p.y1, p.y2, p.progress);
+
+    const tail = Math.max(0, p.progress - 0.18);
+    const tailX = lerp(p.x1, p.x2, tail);
+    const tailY = lerp(p.y1, p.y2, tail);
+
+    gameCtx.strokeStyle = rgbaFromHex(p.color, p.alpha);
+    gameCtx.lineWidth = p.width;
+    gameCtx.lineCap = "round";
+    gameCtx.beginPath();
+    gameCtx.moveTo(tailX, tailY);
+    gameCtx.lineTo(curX, curY);
+    gameCtx.stroke();
+
+    gameCtx.fillStyle = rgbaFromHex(COLORS.white, p.alpha * 0.9);
+    gameCtx.beginPath();
+    gameCtx.arc(curX, curY, 5 + p.width * 0.25, 0, Math.PI * 2);
+    gameCtx.fill();
+  });
 }
 
 function drawHUD() {
@@ -950,6 +1056,19 @@ function drawStarBursts() {
 
     gameCtx.restore();
   });
+}
+
+function drawHitLabels() {
+  hitLabels.forEach((h) => {
+    gameCtx.save();
+    gameCtx.globalAlpha = h.alpha;
+    gameCtx.textAlign = "center";
+    gameCtx.fillStyle = h.color;
+    gameCtx.font = "bold 28px Arial";
+    gameCtx.fillText(h.text, h.x, h.y);
+    gameCtx.restore();
+  });
+  gameCtx.textAlign = "start";
 }
 
 function drawFlashes() {
@@ -1097,6 +1216,10 @@ function pointInRect(x, y, rect) {
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
 }
 
 function rgbaFromHex(hex, alpha) {
