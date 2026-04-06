@@ -34,15 +34,15 @@ let readyBox = null;
 let targetCenter = null;
 let followGuide = null;
 
-let targetZones = [];
-let activeTargetZone = null;
+let impactZones = [];
+let activeTargetZoneId = "glove";
 
 let wristHistory = [];
 let readyFrames = 0;
 let readyLockout = false;
 let throwCooldown = false;
 
-let phase = "LOAD"; // LOAD / READY / RESET / DONE
+let phase = "LOAD";
 let pitchCount = 0;
 const MAX_PITCHES = 6;
 
@@ -61,6 +61,7 @@ let shockwaves = [];
 let impactDust = [];
 let streaks = [];
 let screenPulse = 0;
+let zoneGlowBursts = [];
 
 let bgFade = 0;
 let bgFadeTarget = 0;
@@ -70,7 +71,7 @@ let shakePower = 0;
 let shakeX = 0;
 let shakeY = 0;
 
-const FORWARD_DIRECTION = 1; // set to -1 if throw direction feels backwards
+const FORWARD_DIRECTION = 1;
 const HOLD_FRAMES_REQUIRED = 5;
 const RELEASE_THRESHOLD = 32;
 const MAX_HISTORY = 20;
@@ -88,10 +89,6 @@ const COLORS = {
   dark: "#07131f",
   lime: "#bbff6a"
 };
-
-// base mitt position inside background image
-const MITT_U = 0.765;
-const MITT_V = 0.405;
 
 function setStatus(text) {
   if (statusText) statusText.textContent = text;
@@ -337,11 +334,12 @@ function resetGame() {
   shockwaves = [];
   impactDust = [];
   streaks = [];
+  zoneGlowBursts = [];
   mittFlash = 0;
   mittPulse = 0;
   shakePower = 0;
   screenPulse = 0;
-  activeTargetZone = null;
+  activeTargetZoneId = "glove";
 
   playReset();
   setStatus(`Pitch 1/${MAX_PITCHES} · Put your throwing hand in the blue box.`);
@@ -457,11 +455,10 @@ function processPose() {
     gameCanvas.height
   );
 
-  buildTargetZones(bgRect);
+  buildImpactZones(bgRect);
 
-  targetCenter = activeTargetZone
-    ? { x: activeTargetZone.x, y: activeTargetZone.y }
-    : { x: bgRect.x + bgRect.w * MITT_U, y: bgRect.y + bgRect.h * MITT_V };
+  const activeZone = getActiveTargetZone();
+  targetCenter = activeZone ? { x: activeZone.x, y: activeZone.y } : { x: gameCanvas.width * 0.72, y: gameCanvas.height * 0.38 };
 
   followGuide = {
     x1: targetCenter.x - 14,
@@ -538,112 +535,159 @@ function processPose() {
 }
 
 /* =========================
-   TARGET ZONES
+   IMPACT ZONES
 ========================= */
-function buildTargetZones(bgRect) {
+function buildImpactZones(bgRect) {
   const s = Math.min(bgRect.w, bgRect.h);
 
-  targetZones = [
+  impactZones = [
     {
-      id: "mitt",
+      id: "glove",
       label: "GLOVE SNAP",
+      shape: "ellipse",
       x: bgRect.x + bgRect.w * 0.765,
       y: bgRect.y + bgRect.h * 0.405,
-      innerR: s * 0.038,
-      midR: s * 0.070,
-      outerR: s * 0.110,
+      rx: s * 0.070,
+      ry: s * 0.085,
       color: COLORS.yellow,
-      weight: 1.0
+      bonus: true
     },
     {
-      id: "mittLow",
+      id: "gloveLow",
       label: "LOW SAVE",
-      x: bgRect.x + bgRect.w * 0.738,
-      y: bgRect.y + bgRect.h * 0.462,
-      innerR: s * 0.034,
-      midR: s * 0.065,
-      outerR: s * 0.105,
+      shape: "ellipse",
+      x: bgRect.x + bgRect.w * 0.735,
+      y: bgRect.y + bgRect.h * 0.470,
+      rx: s * 0.060,
+      ry: s * 0.072,
       color: COLORS.orange,
-      weight: 0.95
+      bonus: false
+    },
+    {
+      id: "mask",
+      label: "MASK TAP",
+      shape: "ellipse",
+      x: bgRect.x + bgRect.w * 0.512,
+      y: bgRect.y + bgRect.h * 0.262,
+      rx: s * 0.060,
+      ry: s * 0.055,
+      color: COLORS.aqua,
+      bonus: false
     },
     {
       id: "chest",
       label: "CHEST BLOCK",
-      x: bgRect.x + bgRect.w * 0.505,
-      y: bgRect.y + bgRect.h * 0.520,
-      innerR: s * 0.040,
-      midR: s * 0.080,
-      outerR: s * 0.122,
+      shape: "ellipse",
+      x: bgRect.x + bgRect.w * 0.510,
+      y: bgRect.y + bgRect.h * 0.515,
+      rx: s * 0.095,
+      ry: s * 0.110,
       color: COLORS.green,
-      weight: 0.92
-    },
-    {
-      id: "helmet",
-      label: "MASK TAP",
-      x: bgRect.x + bgRect.w * 0.520,
-      y: bgRect.y + bgRect.h * 0.255,
-      innerR: s * 0.032,
-      midR: s * 0.060,
-      outerR: s * 0.090,
-      color: COLORS.aqua,
-      weight: 0.85
+      bonus: false
     },
     {
       id: "leftPad",
       label: "KNEE SAVE",
-      x: bgRect.x + bgRect.w * 0.315,
+      shape: "ellipse",
+      x: bgRect.x + bgRect.w * 0.314,
       y: bgRect.y + bgRect.h * 0.720,
-      innerR: s * 0.035,
-      midR: s * 0.065,
-      outerR: s * 0.104,
+      rx: s * 0.075,
+      ry: s * 0.090,
       color: COLORS.pink,
-      weight: 0.88
+      bonus: false
     },
     {
       id: "rightPad",
       label: "SHIN SAVE",
-      x: bgRect.x + bgRect.w * 0.685,
-      y: bgRect.y + bgRect.h * 0.725,
-      innerR: s * 0.035,
-      midR: s * 0.065,
-      outerR: s * 0.104,
+      shape: "ellipse",
+      x: bgRect.x + bgRect.w * 0.690,
+      y: bgRect.y + bgRect.h * 0.720,
+      rx: s * 0.072,
+      ry: s * 0.088,
       color: COLORS.lime,
-      weight: 0.88
+      bonus: false
     },
     {
       id: "centerBlock",
       label: "CENTER BLOCK",
+      shape: "ellipse",
       x: bgRect.x + bgRect.w * 0.555,
-      y: bgRect.y + bgRect.h * 0.620,
-      innerR: s * 0.038,
-      midR: s * 0.070,
-      outerR: s * 0.115,
+      y: bgRect.y + bgRect.h * 0.625,
+      rx: s * 0.085,
+      ry: s * 0.095,
       color: COLORS.blue,
-      weight: 0.90
+      bonus: false
     }
   ];
+}
 
-  if (!activeTargetZone || !targetZones.find(z => z.id === activeTargetZone.id)) {
-    activeTargetZone = targetZones[0];
-  }
+function getActiveTargetZone() {
+  return impactZones.find(z => z.id === activeTargetZoneId) || impactZones[0] || null;
 }
 
 function chooseNextTargetZone() {
-  if (!targetZones.length) return;
+  if (!impactZones.length) return;
+  const choices = impactZones.filter(z => z.id !== activeTargetZoneId);
+  const pickFrom = choices.length ? choices : impactZones;
+  const picked = pickFrom[Math.floor(Math.random() * pickFrom.length)];
+  activeTargetZoneId = picked.id;
+}
 
-  const previousId = activeTargetZone ? activeTargetZone.id : null;
-  const options = targetZones.filter(z => z.id !== previousId);
-  const pool = options.length ? options : targetZones;
+function pointInZone(px, py, zone) {
+  if (zone.shape === "ellipse") {
+    const dx = (px - zone.x) / zone.rx;
+    const dy = (py - zone.y) / zone.ry;
+    return dx * dx + dy * dy <= 1;
+  }
 
-  activeTargetZone = pool[Math.floor(Math.random() * pool.length)];
-  targetCenter = { x: activeTargetZone.x, y: activeTargetZone.y };
+  if (zone.shape === "circle") {
+    const dx = px - zone.x;
+    const dy = py - zone.y;
+    return Math.hypot(dx, dy) <= zone.r;
+  }
+
+  return false;
+}
+
+function normalizedDistanceToZone(px, py, zone) {
+  if (zone.shape === "ellipse") {
+    const dx = (px - zone.x) / zone.rx;
+    const dy = (py - zone.y) / zone.ry;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  if (zone.shape === "circle") {
+    const dx = px - zone.x;
+    const dy = py - zone.y;
+    return Math.hypot(dx, dy) / zone.r;
+  }
+
+  return 999;
+}
+
+function findImpactZone(hitX, hitY) {
+  let best = null;
+  let bestNorm = Infinity;
+
+  for (const zone of impactZones) {
+    const norm = normalizedDistanceToZone(hitX, hitY, zone);
+    if (norm <= 1 && norm < bestNorm) {
+      bestNorm = norm;
+      best = zone;
+    }
+  }
+
+  return { zone: best, norm: bestNorm };
 }
 
 /* =========================
    THROW LOGIC
 ========================= */
 function triggerThrow(power) {
-  if (!wristScreen || !targetCenter || !shoulderScreen || !elbowScreen || !activeTargetZone) return;
+  if (!wristScreen || !shoulderScreen || !elbowScreen) return;
+
+  const activeZone = getActiveTargetZone();
+  if (!activeZone) return;
 
   const histFirst = wristHistory[0] || wristScreen;
   const histLast = wristHistory[wristHistory.length - 1] || wristScreen;
@@ -657,20 +701,42 @@ function triggerThrow(power) {
   const elbowToWristX = (wristScreen.x - elbowScreen.x) * FORWARD_DIRECTION;
   const elbowToWristY = elbowScreen.y - wristScreen.y;
 
-  const projectedHit = calculateProjectedHit(
-    shoulderToWristX,
-    shoulderToWristY,
-    elbowToWristX,
-    elbowToWristY,
-    motionDx,
-    motionDy,
-    power
-  );
+  const powerNorm = clamp(power / 220, 0, 1);
 
-  const result = evaluateHit(projectedHit, power, activeTargetZone);
+  const aimX =
+    activeZone.x +
+    clamp(
+      shoulderToWristX * 1.15 +
+      motionDx * 0.95 +
+      elbowToWristX * 0.58,
+      -240,
+      240
+    );
+
+  const aimY =
+    activeZone.y -
+    clamp(
+      shoulderToWristY * 0.90 +
+      motionDy * 0.82 +
+      elbowToWristY * 0.38,
+      -165,
+      180
+    );
+
+  const randomness =
+    powerNorm < 0.35 ? 34 :
+    powerNorm < 0.65 ? 22 : 14;
+
+  const projectedHit = {
+    x: clamp(aimX + rand(-randomness, randomness), 40, gameCanvas.width - 40),
+    y: clamp(aimY + rand(-randomness, randomness), 60, gameCanvas.height - 50)
+  };
 
   playThrow();
-  spawnReleaseTrail(wristScreen.x, wristScreen.y, projectedHit.x, projectedHit.y, clamp(power / 220, 0, 1));
+  spawnReleaseTrail(wristScreen.x, wristScreen.y, projectedHit.x, projectedHit.y, powerNorm);
+
+  const impact = findImpactZone(projectedHit.x, projectedHit.y);
+  const result = evaluateImpactResult(projectedHit, impact.zone, impact.norm, activeZone, powerNorm);
 
   feedbackText = result.label;
   feedbackTimer = 75;
@@ -678,6 +744,10 @@ function triggerThrow(power) {
   spawnBigImpact(projectedHit.x, projectedHit.y, result.impactColor, result.impactPower, result.tier);
   spawnHitLabel(projectedHit.x, projectedHit.y - 24, result.label, result.labelColor);
   spawnScreenShock(projectedHit.x, projectedHit.y, result.tier, result.impactColor);
+
+  if (impact.zone) {
+    spawnZoneGlowBurst(impact.zone);
+  }
 
   shakePower = Math.max(shakePower, result.shake);
   screenPulse = Math.max(screenPulse, result.screenPulse);
@@ -725,112 +795,73 @@ function triggerThrow(power) {
   }, 700);
 }
 
-function calculateProjectedHit(
-  shoulderToWristX,
-  shoulderToWristY,
-  elbowToWristX,
-  elbowToWristY,
-  motionDx,
-  motionDy,
-  power
-) {
-  const powerNorm = clamp(power / 220, 0, 1);
-  const activeBiasX = activeTargetZone.x - targetCenter.x;
-  const activeBiasY = activeTargetZone.y - targetCenter.y;
+function evaluateImpactResult(projectedHit, hitZone, hitNorm, activeZone, powerNorm) {
+  if (hitZone) {
+    const cleanFactor = clamp(1 - hitNorm, 0, 1);
+    const isActive = hitZone.id === activeZone.id;
 
-  const aimX =
-    activeTargetZone.x +
-    clamp(
-      shoulderToWristX * 1.15 +
-      motionDx * 0.95 +
-      elbowToWristX * 0.55 +
-      activeBiasX,
-      -220,
-      220
-    );
+    if (isActive && cleanFactor > 0.62) {
+      playHit();
+      flashGamePanel();
+      return {
+        tier: "bullseye",
+        label: `${hitZone.label}!`,
+        labelColor: hitZone.color,
+        impactColor: hitZone.color,
+        impactPower: 320 + cleanFactor * 220 + powerNorm * 120,
+        shake: 18,
+        screenPulse: 0.58
+      };
+    }
 
-  const aimY =
-    activeTargetZone.y -
-    clamp(
-      shoulderToWristY * 0.88 +
-      motionDy * 0.82 +
-      elbowToWristY * 0.35 -
-      activeBiasY,
-      -150,
-      170
-    );
+    if (isActive) {
+      playHit();
+      flashGamePanel();
+      return {
+        tier: "strong",
+        label: "TARGET HIT",
+        labelColor: hitZone.color,
+        impactColor: hitZone.color,
+        impactPower: 230 + cleanFactor * 150 + powerNorm * 90,
+        shake: 12,
+        screenPulse: 0.36
+      };
+    }
 
-  const randomness =
-    powerNorm < 0.35 ? 32 :
-    powerNorm < 0.65 ? 20 : 12;
+    if (cleanFactor > 0.58) {
+      playNear();
+      return {
+        tier: "zonehit",
+        label: hitZone.label,
+        labelColor: hitZone.color,
+        impactColor: hitZone.color,
+        impactPower: 180 + cleanFactor * 120 + powerNorm * 70,
+        shake: 9,
+        screenPulse: 0.24
+      };
+    }
 
-  return {
-    x: clamp(aimX + rand(-randomness, randomness), 40, gameCanvas.width - 40),
-    y: clamp(aimY + rand(-randomness, randomness), 70, gameCanvas.height - 60)
-  };
-}
-
-function evaluateHit(projectedHit, power, zone) {
-  const dist = Math.hypot(projectedHit.x - zone.x, projectedHit.y - zone.y);
-  const centerFactor = clamp(1 - dist / zone.outerR, 0, 1);
-  const throwFactor = clamp(power / 220, 0, 1);
-
-  let tier;
-  let label;
-  let labelColor;
-  let impactColor;
-  let impactPower;
-  let shake;
-  let screenPulseValue;
-
-  if (dist <= zone.innerR) {
-    tier = "bullseye";
-    label = `${zone.label}!`;
-    labelColor = zone.color;
-    impactColor = zone.color;
-    impactPower = 300 + centerFactor * 240 + throwFactor * 120;
-    shake = 18;
-    screenPulseValue = 0.55;
-    playHit();
-    flashGamePanel();
-  } else if (dist <= zone.midR) {
-    tier = "strong";
-    label = "TARGET HIT";
-    labelColor = COLORS.green;
-    impactColor = zone.color;
-    impactPower = 220 + centerFactor * 170 + throwFactor * 90;
-    shake = 12;
-    screenPulseValue = 0.35;
-    playHit();
-    flashGamePanel();
-  } else if (dist <= zone.outerR) {
-    tier = "graze";
-    label = "NICE TRY";
-    labelColor = COLORS.orange;
-    impactColor = COLORS.orange;
-    impactPower = 145 + centerFactor * 95 + throwFactor * 70;
-    shake = 8;
-    screenPulseValue = 0.22;
     playNear();
-  } else {
-    tier = "miss";
-    label = "BIG THROW!";
-    labelColor = COLORS.pink;
-    impactColor = COLORS.pink;
-    impactPower = 100 + throwFactor * 65;
-    shake = 5;
-    screenPulseValue = 0.14;
-    playMiss();
+    return {
+      tier: "graze",
+      label: "NICE TRY",
+      labelColor: COLORS.orange,
+      impactColor: COLORS.orange,
+      impactPower: 135 + cleanFactor * 80 + powerNorm * 60,
+      shake: 7,
+      screenPulse: 0.18
+    };
   }
 
+  playMiss();
   return {
-    tier,
-    label,
-    labelColor,
-    impactColor,
-    impactPower,
-    shake,
-    screenPulse: screenPulseValue
+    tier: "miss",
+    label: "BIG THROW!",
+    labelColor: COLORS.pink,
+    impactColor: COLORS.pink,
+    impactPower: 95 + powerNorm * 60,
+    shake: 5,
+    screenPulse: 0.12
   };
 }
 
@@ -884,6 +915,17 @@ function spawnHitLabel(x, y, text, color) {
     alpha: 1,
     vy: -0.35,
     scale: 1
+  });
+}
+
+function spawnZoneGlowBurst(zone) {
+  zoneGlowBursts.push({
+    x: zone.x,
+    y: zone.y,
+    rx: zone.rx ? zone.rx * 0.7 : 40,
+    ry: zone.ry ? zone.ry * 0.7 : 40,
+    alpha: 0.6,
+    color: zone.color
   });
 }
 
@@ -994,6 +1036,14 @@ function updateFX() {
     if (s.alpha < 0.05 || s.len < 4) streaks.splice(i, 1);
   }
 
+  for (let i = zoneGlowBursts.length - 1; i >= 0; i--) {
+    const z = zoneGlowBursts[i];
+    z.rx *= 1.03;
+    z.ry *= 1.03;
+    z.alpha *= 0.92;
+    if (z.alpha < 0.04) zoneGlowBursts.splice(i, 1);
+  }
+
   if (feedbackTimer > 0 && feedbackTimer < 999999) feedbackTimer--;
 }
 
@@ -1025,6 +1075,7 @@ function spawnBigImpact(x, y, color, power = 160, tier = "graze") {
   const confettiCount =
     tier === "bullseye" ? ringCount * 12 :
     tier === "strong" ? ringCount * 8 :
+    tier === "zonehit" ? ringCount * 7 :
     tier === "graze" ? ringCount * 5 : ringCount * 2;
 
   for (let i = 0; i < confettiCount; i++) {
@@ -1045,6 +1096,7 @@ function spawnBigImpact(x, y, color, power = 160, tier = "graze") {
   const sparkCount =
     tier === "bullseye" ? 42 :
     tier === "strong" ? 32 :
+    tier === "zonehit" ? 26 :
     tier === "graze" ? 20 : 12;
 
   for (let i = 0; i < sparkCount; i++) {
@@ -1062,6 +1114,7 @@ function spawnBigImpact(x, y, color, power = 160, tier = "graze") {
   const burstCount =
     tier === "bullseye" ? 5 :
     tier === "strong" ? 4 :
+    tier === "zonehit" ? 4 :
     tier === "graze" ? 3 : 2;
 
   for (let i = 0; i < burstCount; i++) {
@@ -1105,6 +1158,7 @@ function spawnScreenShock(x, y, tier, color) {
   const lineCount =
     tier === "bullseye" ? 18 :
     tier === "strong" ? 12 :
+    tier === "zonehit" ? 10 :
     tier === "graze" ? 8 : 5;
 
   for (let i = 0; i < lineCount; i++) {
@@ -1132,6 +1186,7 @@ function drawGame() {
   gameCtx.translate(shakeX, shakeY);
 
   drawBackground();
+  drawImpactZones();
   drawTargetGlow();
   drawProjectileTrails();
   drawShockwaves();
@@ -1155,24 +1210,6 @@ function drawBackground() {
   if (pelhamBgLoaded) {
     const r = getCoverRect(pelhamBg.width, pelhamBg.height, gameCanvas.width, gameCanvas.height);
     gameCtx.drawImage(pelhamBg, r.x, r.y, r.w, r.h);
-
-    if (activeTargetZone) {
-      const g = gameCtx.createRadialGradient(
-        activeTargetZone.x,
-        activeTargetZone.y,
-        6,
-        activeTargetZone.x,
-        activeTargetZone.y,
-        activeTargetZone.outerR * 1.15 + mittPulse * 40
-      );
-      g.addColorStop(0, rgbaFromHex(activeTargetZone.color, 0.26 * mittFlash + 0.08));
-      g.addColorStop(0.45, rgbaFromHex(activeTargetZone.color, 0.12 * mittFlash + 0.03));
-      g.addColorStop(1, "rgba(255,215,80,0)");
-      gameCtx.fillStyle = g;
-      gameCtx.beginPath();
-      gameCtx.arc(activeTargetZone.x, activeTargetZone.y, activeTargetZone.outerR * 1.2 + mittPulse * 16, 0, Math.PI * 2);
-      gameCtx.fill();
-    }
   } else {
     const bg = gameCtx.createLinearGradient(0, 0, 0, gameCanvas.height);
     bg.addColorStop(0, "#173149");
@@ -1187,46 +1224,76 @@ function drawBackground() {
   gameCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
 }
 
+function drawImpactZones() {
+  const activeZone = getActiveTargetZone();
+  const pulse = 1 + Math.sin(performance.now() * 0.006) * 0.05 + mittPulse * 0.06;
+
+  for (const zone of impactZones) {
+    const isActive = activeZone && zone.id === activeZone.id;
+    const alphaFill = isActive ? 0.14 : 0.05;
+    const alphaStroke = isActive ? 0.48 : 0.14;
+    const scale = isActive ? pulse : 1;
+
+    gameCtx.save();
+
+    for (const glow of zoneGlowBursts) {
+      if (Math.abs(glow.x - zone.x) < 1 && Math.abs(glow.y - zone.y) < 1) {
+        gameCtx.fillStyle = rgbaFromHex(glow.color, glow.alpha * 0.32);
+        gameCtx.beginPath();
+        gameCtx.ellipse(glow.x, glow.y, glow.rx, glow.ry, 0, 0, Math.PI * 2);
+        gameCtx.fill();
+      }
+    }
+
+    gameCtx.fillStyle = rgbaFromHex(zone.color, alphaFill);
+    gameCtx.strokeStyle = rgbaFromHex(isActive ? COLORS.white : zone.color, alphaStroke);
+    gameCtx.lineWidth = isActive ? 3 : 2;
+
+    if (zone.shape === "ellipse") {
+      gameCtx.beginPath();
+      gameCtx.ellipse(zone.x, zone.y, zone.rx * scale, zone.ry * scale, 0, 0, Math.PI * 2);
+      gameCtx.fill();
+      gameCtx.stroke();
+    }
+
+    if (isActive) {
+      gameCtx.strokeStyle = rgbaFromHex(zone.color, 0.85);
+      gameCtx.lineWidth = 2;
+      gameCtx.beginPath();
+      gameCtx.moveTo(zone.x - zone.rx * 0.35, zone.y);
+      gameCtx.lineTo(zone.x + zone.rx * 0.35, zone.y);
+      gameCtx.moveTo(zone.x, zone.y - zone.ry * 0.35);
+      gameCtx.lineTo(zone.x, zone.y + zone.ry * 0.35);
+      gameCtx.stroke();
+    }
+
+    gameCtx.restore();
+  }
+}
+
 function drawTargetGlow() {
-  if (!activeTargetZone || phase === "DONE") return;
+  const activeZone = getActiveTargetZone();
+  if (!activeZone || phase === "DONE") return;
 
   const pulse = 1 + Math.sin(performance.now() * 0.006) * 0.06 + mittPulse * 0.06;
 
   const g = gameCtx.createRadialGradient(
-    activeTargetZone.x,
-    activeTargetZone.y,
+    activeZone.x,
+    activeZone.y,
     10,
-    activeTargetZone.x,
-    activeTargetZone.y,
-    activeTargetZone.outerR * pulse
+    activeZone.x,
+    activeZone.y,
+    Math.max(activeZone.rx, activeZone.ry) * 2.3 * pulse
   );
 
-  g.addColorStop(0, rgbaFromHex(activeTargetZone.color, 0.22));
-  g.addColorStop(0.45, rgbaFromHex(activeTargetZone.color, 0.08));
-  g.addColorStop(1, rgbaFromHex(activeTargetZone.color, 0));
+  g.addColorStop(0, rgbaFromHex(activeZone.color, 0.22));
+  g.addColorStop(0.45, rgbaFromHex(activeZone.color, 0.08));
+  g.addColorStop(1, rgbaFromHex(activeZone.color, 0));
 
   gameCtx.fillStyle = g;
   gameCtx.beginPath();
-  gameCtx.arc(activeTargetZone.x, activeTargetZone.y, activeTargetZone.outerR * pulse, 0, Math.PI * 2);
+  gameCtx.arc(activeZone.x, activeZone.y, Math.max(activeZone.rx, activeZone.ry) * 2.2 * pulse, 0, Math.PI * 2);
   gameCtx.fill();
-
-  gameCtx.lineWidth = 3;
-  gameCtx.strokeStyle = rgbaFromHex(activeTargetZone.color, 0.25);
-  gameCtx.beginPath();
-  gameCtx.arc(activeTargetZone.x, activeTargetZone.y, activeTargetZone.outerR * 0.98 * pulse, 0, Math.PI * 2);
-  gameCtx.stroke();
-
-  gameCtx.lineWidth = 2.5;
-  gameCtx.strokeStyle = rgbaFromHex(activeTargetZone.color, 0.40);
-  gameCtx.beginPath();
-  gameCtx.arc(activeTargetZone.x, activeTargetZone.y, activeTargetZone.midR * pulse, 0, Math.PI * 2);
-  gameCtx.stroke();
-
-  gameCtx.lineWidth = 2;
-  gameCtx.strokeStyle = rgbaFromHex(COLORS.white, 0.58);
-  gameCtx.beginPath();
-  gameCtx.arc(activeTargetZone.x, activeTargetZone.y, activeTargetZone.innerR * pulse, 0, Math.PI * 2);
-  gameCtx.stroke();
 }
 
 function drawProjectileTrails() {
@@ -1285,6 +1352,8 @@ function drawStreaks() {
 }
 
 function drawHUD() {
+  const activeZone = getActiveTargetZone();
+
   gameCtx.fillStyle = "rgba(6,16,28,0.78)";
   roundRectFill(30, 24, 320, 44, 18);
   roundRectFill(1040, 24, 250, 104, 20);
@@ -1313,12 +1382,16 @@ function drawHUD() {
   gameCtx.fillText("PITCH TO PELHAM", gameCanvas.width / 2, 50);
 
   gameCtx.font = "bold 18px Arial";
-  gameCtx.fillStyle = activeTargetZone ? activeTargetZone.color : COLORS.white;
+  gameCtx.fillStyle = activeZone ? activeZone.color : COLORS.white;
   gameCtx.fillText(
-    activeTargetZone ? `TARGET: ${activeTargetZone.label}` : "TARGET LOCKING...",
+    activeZone ? `TARGET: ${activeZone.label}` : "TARGET LOCKING...",
     gameCanvas.width / 2,
     78
   );
+
+  gameCtx.font = "bold 14px Arial";
+  gameCtx.fillStyle = "rgba(255,255,255,0.9)";
+  gameCtx.fillText("Hit the glowing zone for bigger reactions", gameCanvas.width / 2, 98);
 
   gameCtx.font = "bold 34px Arial";
   gameCtx.fillStyle =
@@ -1328,13 +1401,13 @@ function drawHUD() {
     phase === "DONE" ? COLORS.yellow :
     COLORS.white;
 
-  gameCtx.fillText(phase, gameCanvas.width / 2, 108);
+  gameCtx.fillText(phase, gameCanvas.width / 2, 124);
 
   if (feedbackTimer > 0) {
-    roundRectFill(490, 136, 415, 60, 18);
+    roundRectFill(490, 146, 415, 60, 18);
     gameCtx.fillStyle = COLORS.white;
     gameCtx.font = "bold 30px Arial";
-    gameCtx.fillText(feedbackText, gameCanvas.width / 2, 175);
+    gameCtx.fillText(feedbackText, gameCanvas.width / 2, 185);
   }
 
   gameCtx.textAlign = "start";
